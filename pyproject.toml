@@ -1,0 +1,41 @@
+[project]
+name = "talos"
+version = "0.1.0"
+description = "Resolves records to legal entities, links entities into groups, and computes group exposure entirely inside Exasol."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pyexasol>=2.4.0",
+    "pyarrow>=17.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.31.0",
+    "jinja2>=3.1.4",
+    "python-multipart>=0.0.12",
+    "itsdangerous>=2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.6.0",
+    "pip-audit>=2.7.0",
+]
+
+[project.scripts]
+talos = "orchestrator.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["orchestrator", "ui", "data"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+markers = [
+    "exasol: marks tests that require a live Exasol instance",
+]

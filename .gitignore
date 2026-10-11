@@ -1,0 +1,25 @@
+# Environment & secrets
+.env
+.talos/
+
+# Python & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Tests & linters
+.pytest_cache/
+.ruff_cache/
+
+# Data outputs & parquets (except test fixtures)
+data/out/
+*.parquet
+!tests/fixtures/*.parquet
+
+# OS specific
+.DS_Store
+Thumbs.db

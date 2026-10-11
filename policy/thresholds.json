@@ -1,0 +1,11 @@
+{
+  "ID_NAME_MIN_SIM": 0.60,
+  "T1_MAX_DIST": 2,
+  "T2_LOW": 0.70,
+  "T2_HIGH": 0.95,
+  "W_NAME": 0.60,
+  "W_PHON": 0.15,
+  "W_PIN": 0.15,
+  "W_STATE": 0.10,
+  "JUDGE_MIN_CONF": 0.80
+}
