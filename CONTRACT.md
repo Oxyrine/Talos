@@ -504,6 +504,19 @@ Percentages are stored strictly as whole numbers:
 | `LP_MAX_PASSES` | Integer Count | 50 | Maximum Label Propagation convergence iterations |
 | `BLOCK_MAX` | Integer Count | 500 | Max records per block before dropping oversize candidate keys |
 
+### 2.1 Matching thresholds
+
+Matching thresholds are scores in the range 0 to 1 (not percentages, so the whole-number rule above does not apply). `policy/thresholds.json` is the source file. `talos load` writes each key to `GOV.POLICY_EVENT` as a policy event (effective from 2026-04-01), so a replay reads the value that was in force. They are frozen and committed before the test dataset is generated.
+
+| Key | Value | Purpose |
+|---|---|---|
+| `ID_NAME_MIN_SIM` | 0.60 | Below this name similarity, a shared ID is an ID-name conflict (T3) |
+| `T1_MAX_DIST` | 2 | Maximum edit distance for T1 when the pincode also matches |
+| `T2_LOW` | 0.70 | Composite score below this is discarded (`DISCARD_LOW_SCORE`) |
+| `T2_HIGH` | 0.95 | Composite score at or above this is T1; between `T2_LOW` and this is T2 |
+| `W_NAME`, `W_PHON`, `W_PIN`, `W_STATE` | 0.60, 0.15, 0.15, 0.10 | Composite score weights (sum to 1.00) |
+| `JUDGE_MIN_CONF` | 0.80 | Minimum model confidence for a `same` verdict to count as a recommendation |
+
 ---
 
 ## 3. REPORT View Schemas (Consumed by UI & MCP via `TALOS_READER`)
@@ -557,7 +570,7 @@ Evaluated only on T2 candidate pairs:
   "rationale": "string <= 40 words"
 }
 ```
-Any extra key, invalid field, out-of-vocabulary evidence token, or confidence < 0.80 causes the verdict to be recorded as `invalid` and treated as `unsure`.
+Any extra key, invalid field, or out-of-vocabulary evidence token causes the verdict to be recorded with `valid = FALSE` and treated as `unsure`. A schema-valid verdict with confidence below `JUDGE_MIN_CONF` is recorded with `valid = TRUE` but its effective decision is `unsure`, so the audit statistics separate malformed output from low confidence.
 
 ---
 
@@ -576,6 +589,49 @@ class ProposalConflictError(Exception):
 class UnauthorizedReviewerError(Exception):
     """Raised when an action requires APPROVER role but reviewer is ANALYST (HTTP 403)."""
     pass
+```
+
+### 5.1a Result types
+```python
+@dataclass(frozen=True)
+class Reviewer:
+    name: str                                   # shown in the decision log
+    role: Literal["APPROVER", "ANALYST"]        # only APPROVER may decide
+
+@dataclass(frozen=True)
+class DecisionResult:
+    decision_id: str                            # 'D-...'
+    decision: str                               # APPROVE | REJECT | DEFER | BATCH_APPROVE | BATCH_FAILED | RULING
+    proposal_ids: tuple[str, ...]               # every proposal the decision covers
+    decided_at: datetime                        # UTC, the same value as recorded_at on the events
+    published_run_id: str | None                # run published after the commit, if any
+
+@dataclass(frozen=True)
+class BatchSample:
+    batch_id: str
+    batch_kind: Literal["RECORD_LINK", "OWNERSHIP"]
+    seed: int                                   # secrets.randbits(31)
+    sample_ids: tuple[str, ...]                 # random.Random(seed).sample(sorted(covered_ids), k)
+    covered_ids: tuple[str, ...]                # every proposal in the batch, sorted
+    total_count: int
+    sample_count: int
+
+@dataclass(frozen=True)
+class RunResult:
+    run_id: str                                 # 'R-...'
+    output_hash: str | None                     # None when status is LP_ABORTED
+    status: Literal["OK", "LP_ABORTED"]
+    lp_passes: int
+    row_count: int
+
+@dataclass(frozen=True)
+class ReplayResult:
+    original_run_id: str
+    replay_run_id: str
+    original_hash: str
+    replay_hash: str
+    matches: bool                               # original_hash == replay_hash
+    code_version_differs: bool                  # replayed on different code than the original
 ```
 
 ### 5.2 Signatures
@@ -676,3 +732,19 @@ def replay(run_id: str) -> ReplayResult:
    - Step 2 (Corroborated Batch): Reported ₹40,00,00,000.00; Talos = ₹58,20,00,000.00; HoldCo = ₹36,40,00,000.00 (Crosses 10% line)
    - Step 3 (T1 / T3): Reported ₹40,00,00,000.00; Talos = ₹75,60,00,000.00; HoldCo = ₹36,40,00,000.00
    - Step 4 (Ownership): Reported ₹40,00,00,000.00; Talos = ₹112,00,00,000.00 (Breaches 25% limit)
+
+---
+
+## 7. Roles & Privileges (`sql/06_roles_grants.sql`)
+
+Users are created by `talos init` as SYS. No role holds `UPDATE` or `DELETE` on any `RAW_*`, `GRAPH` or `GOV` table. The only `UPDATE` in the system is on `RESOLVE.W_COMPONENT_RUN`, which is a transient working table and not evidence.
+
+| User | Used by | Privileges |
+|---|---|---|
+| `TALOS_LOADER` | `talos load` | `CREATE SESSION`. `INSERT` on every `RAW_*` table, every `TRUTH` table, and `GOV.POLICY_EVENT`. |
+| `TALOS_PIPELINE` | `talos match`, `talos publish`, `talos replay`, the judge | `SELECT` on `RAW_*`, `GRAPH`, `GOV`. `SELECT, INSERT, DELETE` on `STAGE` and `RESOLVE` (rebuilt each run). `UPDATE` on `RESOLVE.W_COMPONENT_RUN` only. `INSERT` on `GOV.PROPOSAL`, `GOV.REPORT_RUN`, `GOV.RUN_MEMBERSHIP`, `GOV.RUN_OUTPUT`, `GOV.RUN_REPORTED`, `GOV.PIPELINE_TIMING`. Nothing on `GRAPH` except `SELECT`. Nothing on `TRUTH`. |
+| `TALOS_APPROVER` | `decide()`, `batch_decide()`, `rule()` | `SELECT` on `STAGE`, `RESOLVE`, `GRAPH`, `GOV`, `RAW_REGISTRY`. `INSERT` on `GRAPH.LINK_EVENT`, `GRAPH.OWNERSHIP_EVENT`, `GRAPH.RULING_EVENT`, `GRAPH.ENTITY`, `GOV.DECISION_LOG`, `GOV.DECISION_COVERS`, `GOV.POLICY_EVENT`. |
+| `TALOS_READER` | web console, Exasol MCP server | `SELECT` on the `REPORT` schema only. Views run with owner rights, so no base-table grants are needed. |
+| `TALOS_EVAL` | `talos eval` | `SELECT` on everything, including `TRUTH`. |
+
+The `test_grants` test (`pytest -m exasol`) asserts every row of this table, including the denials.

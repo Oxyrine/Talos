@@ -19,10 +19,10 @@ In corporate banking, credit exposure is fragmented across disparate books:
 - **Collateral Management**: Share pledges, asset mortgages.
 
 Under the Reserve Bank of India (RBI) Large Exposures Framework (LEF):
-- A lender's exposure to a **Group of Connected Counterparties** must not exceed **25% of eligible capital base** (Tier 1 capital).
-- Any single exposure exceeding **10% of eligible capital** triggers formal large-exposure regulatory reporting.
+- A lender's exposure to a **Group of Connected Counterparties** must not exceed **25% of the eligible capital base**.
+- Any exposure **at or above 10% of eligible capital** is a large exposure and is reported as such.
 
-When companies borrow under different trade styles, minor typographical aliases, or via opaque intermediate holding companies, fragmented internal data hides the true consolidated exposure. A lender with a ₹420 crore capital base and a ₹105 crore statutory limit (25%) may see a borrower reported at only ₹40 crore (9.5%), while their true group exposure sits at ₹112 crore (26.7%)—an undetected regulatory breach.
+When companies borrow under different trade styles, minor typographical aliases, or via opaque intermediate holding companies, fragmented internal data hides the true consolidated exposure. A lender with a ₹420 crore capital base and a ₹105 crore regulatory limit (25%) may see a borrower reported at only ₹40 crore (9.5%), while their true group exposure sits at ₹112 crore (26.7%)—an undetected regulatory breach.
 
 ---
 
@@ -30,17 +30,17 @@ When companies borrow under different trade styles, minor typographical aliases,
 
 Talos executes entity resolution, graph label propagation, exposure cube aggregation, and historical point-in-time time-travel entirely within Exasol:
 
-| # | Exasol Capability | Usage in Talos | SQL Location |
+| # | Exasol Capability | Usage in Talos | Planned SQL file |
 |---|---|---|---|
-| 1 | `EDIT_DISTANCE`, `SOUNDEX`, `COLOGNE_PHONETIC` | In-database phonetic and string distance scoring across multi-million pairs | [`sql/10_standardise.sql`](sql/10_standardise.sql), [`sql/40_score_tier.sql`](sql/40_score_tier.sql) |
-| 2 | `HASH_SHA256` | Token hashing (PAN, CIN, LEI, DINs) preserving PII privacy across matching pipelines | [`sql/20_id_tokens_exact.sql`](sql/20_id_tokens_exact.sql) |
-| 3 | `REGEXP_LIKE` & `REGEXP_REPLACE` | High-throughput name standardisation, legal suffix stripping, and PAN/CIN format validation | [`sql/10_standardise.sql`](sql/10_standardise.sql) |
-| 4 | `QUALIFY` with Window Functions | De-duplicating latest snapshot loads and selecting candidate pairs per partitioning window | [`sql/10_standardise.sql`](sql/10_standardise.sql), [`sql/70_propose_record_links.sql`](sql/70_propose_record_links.sql) |
-| 5 | `MERGE` inside iterative loops | Synchronous in-database Label Propagation for deterministic connected component group discovery | [`sql/52_components_pass.sql`](sql/52_components_pass.sql) |
-| 6 | `CONNECT BY NOCYCLE`, `SYS_CONNECT_BY_PATH` | Cycle-safe hierarchical tree traversal for ownership lineage reporting | [`sql/81_report_views.sql`](sql/81_report_views.sql) |
-| 7 | `GROUPING SETS`, `ROLLUP` | Instantaneous multidimensional OLAP exposure cube calculation across groups, entities, and books | [`sql/81_report_views.sql`](sql/81_report_views.sql) |
-| 8 | Row-level `DISTRIBUTE BY` | Colocating candidate pairs and component working tables across cluster nodes | [`sql/03_stage_resolve.sql`](sql/03_stage_resolve.sql) |
-| 9 | Role-Based Access Control & Views | Enforcing immutable evidence: no role holds `UPDATE` or `DELETE` on raw data, graph events, or governance tables | [`sql/06_roles_grants.sql`](sql/06_roles_grants.sql) |
+| 1 | `EDIT_DISTANCE`, `SOUNDEX`, `COLOGNE_PHONETIC` | In-database phonetic and string distance scoring across every candidate pair | `sql/10_standardise.sql`, `sql/40_score_tier.sql` |
+| 2 | `HASH_SHA256` | Token hashing (PAN, CIN, LEI, DINs) preserving PII privacy across matching pipelines | `sql/20_id_tokens_exact.sql` |
+| 3 | `REGEXP_LIKE` & `REGEXP_REPLACE` | High-throughput name standardisation, legal suffix stripping, and PAN/CIN format validation | `sql/10_standardise.sql` |
+| 4 | `QUALIFY` with Window Functions | De-duplicating latest snapshot loads and selecting candidate pairs per partitioning window | `sql/10_standardise.sql`, `sql/70_propose_record_links.sql` |
+| 5 | `MERGE` inside iterative loops | Synchronous in-database Label Propagation for deterministic connected component group discovery | `sql/52_components_pass.sql` |
+| 6 | `CONNECT BY NOCYCLE`, `SYS_CONNECT_BY_PATH` | Cycle-safe hierarchical tree traversal for ownership lineage reporting | `sql/81_report_views.sql` |
+| 7 | `GROUPING SETS`, `ROLLUP` | Multidimensional OLAP exposure cube calculation across groups, entities, and books | `sql/81_report_views.sql` |
+| 8 | Row-level `DISTRIBUTE BY` | Colocating candidate pairs and component working tables across cluster nodes | `sql/03_stage_resolve.sql` |
+| 9 | Role-Based Access Control & Views | Enforcing immutable evidence: no role holds `UPDATE` or `DELETE` on raw data, graph events, or governance tables | `sql/06_roles_grants.sql` |
 
 ---
 
@@ -73,39 +73,43 @@ Talos executes entity resolution, graph label propagation, exposure cube aggrega
 
 ---
 
+## Project Status
+
+Scaffold stage (11 Oct 2026). Done: repository layout, frozen `CONTRACT.md`, generator vocabulary, CI. Not built yet: the generator world and planted cases, the SQL pipeline, the orchestrator, the web console and the evaluator. The CLI subcommands only print a message until they are implemented.
+
+---
+
 ## Quick Start
 
 ```powershell
 # 1. Clone repository
 git clone https://github.com/Oxyrine/Talos.git
-cd talos
+cd Talos
 
 # 2. Run the end-to-end demo (generates dev world, loads Exasol, runs pipeline, and starts UI)
-uv run talos demo
+uv run talos demo   # NOT IMPLEMENTED YET: currently a stub, see Project Status
 ```
 
-Once running, navigate to `http://127.0.0.1:8000` to access the interactive review console.
+Once the demo is implemented, navigate to `http://127.0.0.1:8000` to access the interactive review console.
 
 ---
 
 ## Benchmark Metrics
 
 <!-- METRICS:START -->
-| Metric | Baseline (Reported) | Talos Resolved (Dev) | Talos Resolved (Test) | Target |
-|---|---|---|---|---|
-| **Understated Group Exposure** | ₹342.10 cr | ₹0.00 cr | — | $\le 5\%$ of baseline |
-| **Overstated Group Exposure** | ₹0.00 cr | ₹0.00 cr | — | ₹0.00 cr |
-| **Missed Breaches (> 25% Limit)** | 6 of 6 missed | 0 of 6 missed | — | 0 missed |
-| **False Breaches** | 0 | 0 | — | 0 false |
-| **Candidate Reduction Ratio** | — | > 99.9% | — | > 99.9% |
-| **Blocking Recall** | — | 99.4% | — | $\ge 99.0\%$ |
-| **Entity Resolution Precision** | — | 99.8% | — | $\ge 99.0\%$ |
-| **Entity Resolution Recall** | — | 97.9% | — | $\ge 97.0\%$ |
-| **ID–Name Conflicts Caught** | — | 12 of 12 (100%) | — | 12 of 12 |
-| **Decoy False Merges** | — | 0 of 30 (0%) | — | 0 false merges |
-| **Replay Fidelity (Hash Match)** | — | 100% | — | 100% |
-| **Settled in Exasol SQL** | — | 100.0% | — | $\ge 95.0\%$ |
-| **External LLM Share** | — | 0.0% | — | $< 5.0\%$ |
+Not yet measured. This block is generated by `talos eval` against planted ground truth once the pipeline exists; until then only the targets are stated.
+
+| Metric | Dev | Test (unseen) | Target |
+|---|---|---|---|
+| Understated group exposure, after Talos vs before | not measured | not measured | at most 5% of the before figure |
+| Overstated group exposure | not measured | not measured | near zero, every rupee explained |
+| Missed breaches / false breaches | not measured | not measured | 0 of 6 / 0 |
+| Blocking recall | not measured | not measured | 0.99 |
+| Entity-resolution precision / recall | not measured | not measured | 0.99 / 0.97 |
+| ID-name conflicts routed to T3 | not measured | not measured | all 12 |
+| Decoy false merges | not measured | not measured | 0 of 30 |
+| Replay fidelity (output hash match) | not measured | not measured | 100% |
+| Resolved without the model | not measured | not measured | 95% |
 <!-- METRICS:END -->
 
 ---
