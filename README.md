@@ -1,6 +1,6 @@
 # Talos
 
-[![CI](https://github.com/Oxyrine/talos/actions/workflows/ci.yml/badge.svg)](https://github.com/Oxyrine/talos/actions/workflows/ci.yml)
+[![CI](https://github.com/Oxyrine/Talos/actions/workflows/ci.yml/badge.svg)](https://github.com/Oxyrine/Talos/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python: 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
 
@@ -77,7 +77,7 @@ Talos executes entity resolution, graph label propagation, exposure cube aggrega
 
 ```powershell
 # 1. Clone repository
-git clone https://github.com/Oxyrine/talos.git
+git clone https://github.com/Oxyrine/Talos.git
 cd talos
 
 # 2. Run the end-to-end demo (generates dev world, loads Exasol, runs pipeline, and starts UI)
