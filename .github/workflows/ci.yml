@@ -1,0 +1,18 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # uv reads requires-python (3.12) from pyproject.toml
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest -m "not exasol"
+# ponytail: the Exasol Nano integration job is added once the SQL pipeline exists (CONTRACT.md §11.3 of the plan).
