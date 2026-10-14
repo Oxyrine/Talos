@@ -9,27 +9,22 @@ from typing import Any
 
 from pyexasol import ExaConnection
 
+from orchestrator.db import REPO_ROOT
+
 
 def load_thresholds(path: str | Path | None = None) -> dict[str, float]:
     """Load matching thresholds from policy/thresholds.json."""
     if path is None:
-        path = Path("policy/thresholds.json")
+        path = REPO_ROOT / "policy" / "thresholds.json"
     else:
         path = Path(path)
+        if not path.is_file():
+            alt = REPO_ROOT / path
+            if alt.is_file():
+                path = alt
 
     if not path.is_file():
-        # Fallback to defaults
-        return {
-            "ID_NAME_MIN_SIM": 0.60,
-            "T1_MAX_DIST": 2.0,
-            "T2_LOW": 0.70,
-            "T2_HIGH": 0.95,
-            "W_NAME": 0.60,
-            "W_PHON": 0.15,
-            "W_PIN": 0.15,
-            "W_STATE": 0.10,
-            "JUDGE_MIN_CONF": 0.80,
-        }
+        raise FileNotFoundError(f"Thresholds file not found at {path}")
 
     return json.loads(path.read_text(encoding="utf-8"))
 

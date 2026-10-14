@@ -1,6 +1,8 @@
-"""tests/test_sql_files.py: Test SQL state-machine splitter and SQL formatting."""
+"""tests/test_sql_files.py: Test SQL state-machine splitter, doubled-brace handling, and SQL formatting."""
 
 from pathlib import Path
+
+import pytest
 
 from orchestrator.db import split_sql
 
@@ -74,17 +76,31 @@ def test_split_sql_udf_block():
     assert stmts[2] == "SELECT 2"
 
 
-def test_sql_files_formatting_if_present():
+def test_sql_doubled_braces_formatting():
+    """Verify regex patterns with doubled braces like [A-Z]{{5}} format cleanly without pyexasol errors."""
+    sql = "SELECT pan FROM raw WHERE REGEXP_LIKE(pan, '^[A-Z]{{5}}[0-9]{{4}}[A-Z]$') AND business_date = {business_date}"
+    params = {"business_date": "2026-09-30"}
+    formatted = sql.format_map(params)
+    assert "^[A-Z]{5}[0-9]{4}[A-Z]$" in formatted
+    assert "2026-09-30" in formatted
+
+
+def test_sql_files_formatting():
     """Verify any sql/*.sql files on disk can format without syntax errors."""
     sql_dir = Path("sql")
-    if not sql_dir.is_dir():
-        return
+    if not sql_dir.is_dir() or not list(sql_dir.glob("*.sql")):
+        pytest.skip("Track A sql/ directory not yet present in repository")
 
     sample_params = {
         "business_date": "2026-09-30",
         "known_at": "2026-10-01 00:00:00",
         "run_id": "R-TEST-0001",
         "baseline_run": "R-TEST-0001",
+        "los_load_id": "LOAD-01",
+        "tsy_load_id": "LOAD-02",
+        "gte_load_id": "LOAD-03",
+        "col_load_id": "LOAD-04",
+        "reg_load_id": "LOAD-05",
         "CAPITAL_BASE_INR": 4200000000.0,
         "GROUP_LIMIT_PCT": 25,
         "LE_LINE_PCT": 10,
@@ -111,11 +127,9 @@ def test_sql_files_formatting_if_present():
     for sql_file in sql_dir.glob("*.sql"):
         text = sql_file.read_text(encoding="utf-8")
         stmts = split_sql(text)
-        assert len(stmts) >= 0
+        assert len(stmts) >= 1, f"Empty or unparseable SQL file: {sql_file}"
         for s in stmts:
-            # Check for double braces and formatting
             try:
-                # Test format_map with sample params
                 s.format_map(sample_params)
             except KeyError:
-                pass  # Specific params will be supplied at runtime
+                pass

@@ -5,7 +5,7 @@ description = "Resolves records to legal entities, links entities into groups, a
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "pyexasol>=2.4.0",
+    "pyexasol>=2.4.1",
     "pyarrow>=17.0.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.31.0",

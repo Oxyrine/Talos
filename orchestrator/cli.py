@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from orchestrator.db import connect, load_env_file, run_sql_file
+from orchestrator.db import REPO_ROOT, connect, load_env_file, run_sql_file
 from orchestrator.loader import load
 from orchestrator.pipeline import match, publish_run
 from orchestrator.replay import replay
@@ -73,12 +73,12 @@ def _cmd_init(args: argparse.Namespace) -> int:
     new_passwords = False
     for r in roles:
         env_key = f"TALOS_{r.upper()}_PASSWORD"
-        if env_key not in existing_env:
+        if env_key not in existing_env or not existing_env[env_key] or existing_env[env_key].startswith("change_me_"):
             existing_env[env_key] = secrets.token_urlsafe(24)
             new_passwords = True
             os.environ[env_key] = existing_env[env_key]
 
-    if "TALOS_SESSION_SECRET" not in existing_env:
+    if "TALOS_SESSION_SECRET" not in existing_env or not existing_env["TALOS_SESSION_SECRET"] or existing_env["TALOS_SESSION_SECRET"].startswith("change_me_"):
         existing_env["TALOS_SESSION_SECRET"] = secrets.token_urlsafe(32)
         new_passwords = True
     if "TALOS_JUDGE" not in existing_env:
@@ -100,6 +100,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         return 1
 
     # Run DDL scripts
+    sql_dir = REPO_ROOT / "sql"
     sql_files = [
         "01_schemas.sql",
         "02_raw.sql",
@@ -112,17 +113,21 @@ def _cmd_init(args: argparse.Namespace) -> int:
     ]
 
     for fname in sql_files:
-        fpath = Path("sql") / fname
-        if fpath.is_file():
-            print(f"Running {fpath}...")
-            # Pass role passwords for 06_roles_grants.sql
-            params = {f"pwd_{r}": existing_env[f"TALOS_{r.upper()}_PASSWORD"] for r in roles}
-            try:
-                run_sql_file(conn, fpath, **params)
-            except Exception as e:
-                print(f"Error running {fname}: {e}", file=sys.stderr)
-                conn.close()
-                return 1
+        fpath = sql_dir / fname
+        if not fpath.is_file():
+            print(f"Required DDL file {fpath} not found.", file=sys.stderr)
+            conn.close()
+            raise FileNotFoundError(f"Required DDL file {fpath} not found.")
+
+        print(f"Running {fpath}...")
+        # Pass role passwords for 06_roles_grants.sql
+        params = {f"pwd_{r}": existing_env[f"TALOS_{r.upper()}_PASSWORD"] for r in roles}
+        try:
+            run_sql_file(conn, fpath, **params)
+        except Exception as e:
+            print(f"Error running {fname}: {e}", file=sys.stderr)
+            conn.close()
+            return 1
 
     conn.close()
     print("Talos database initialized successfully.")
@@ -131,6 +136,12 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 def _cmd_reset(args: argparse.Namespace) -> int:
     """Drop and re-initialize all Talos schemas."""
+    dsn = os.environ.get("EXASOL_DSN", "127.0.0.1:8563")
+    is_localhost = any(dsn.startswith(prefix) for prefix in ("127.0.0.1", "localhost", "::1"))
+    if not is_localhost and not getattr(args, "force", False):
+        print(f"Refusing to drop schemas on non-localhost DSN '{dsn}' without --force.", file=sys.stderr)
+        return 1
+
     print("Resetting all Talos schemas...")
     try:
         conn = connect("sys", autocommit=True)
@@ -288,6 +299,11 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         metrics = compute_metrics(profile=profile)
         print("Evaluation complete:")
         print(json.dumps(metrics, indent=2))
+
+        # Strict: missing metrics must cause non-zero exit code
+        if any(v is None or v == "not measured" for v in metrics.values()):
+            print("Evaluation benchmark incomplete: some metrics could not be computed.", file=sys.stderr)
+            return 1
         return 0
     except Exception as e:
         print(f"Evaluation failed: {e}", file=sys.stderr)
@@ -321,8 +337,9 @@ def _cmd_add_reviewer(args: argparse.Namespace) -> int:
     if reviewers_file.is_file():
         try:
             reviewers = json.loads(reviewers_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Corrupt reviewers file at {reviewers_file}: {e}. Refusing to overwrite to prevent data loss.", file=sys.stderr)
+            return 1
 
     reviewers[name] = {
         "name": name,
@@ -392,7 +409,8 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("init", help="Initialize Exasol users, roles, and schemas")
 
     # reset
-    subparsers.add_parser("reset", help="Drop and re-initialize all Talos schemas")
+    reset_p = subparsers.add_parser("reset", help="Drop and re-initialize all Talos schemas")
+    reset_p.add_argument("--force", action="store_true", help="Force drop schemas on non-localhost DSN")
 
     # generate
     gen_p = subparsers.add_parser("generate", help="Generate synthetic dataset")
@@ -424,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
     # eval
     eval_p = subparsers.add_parser("eval", help="Execute benchmark evaluation and write metrics")
     eval_p.add_argument("--profile", choices=["dev", "test"], default="dev")
+    eval_p.add_argument("--force", action="store_true", help="Force schema reset on non-localhost DSN")
 
     # add-reviewer
     rev_p = subparsers.add_parser("add-reviewer", help="Register a reviewer with scrypt password hash")
@@ -440,6 +459,7 @@ def main(argv: list[str] | None = None) -> int:
     demo_p = subparsers.add_parser("demo", help="End-to-end demo execution")
     demo_p.add_argument("--host", default="127.0.0.1")
     demo_p.add_argument("--port", type=int, default=8000)
+    demo_p.add_argument("--force", action="store_true", help="Force schema reset on non-localhost DSN")
 
     args = parser.parse_args(argv)
     if not args.command:

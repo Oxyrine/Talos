@@ -251,6 +251,13 @@ def seed_policy_events(conn: ExaConnection) -> int:
             }
         )
 
+    # Read existing event_ids to avoid duplicates
+    existing_stmt = conn.execute("SELECT event_id FROM GOV.POLICY_EVENT")
+    existing_ids = {
+        (r["event_id"] if isinstance(r, dict) else r[0])
+        for r in existing_stmt.fetchall()
+    }
+
     rows_inserted = 0
     insert_sql = """
     INSERT INTO GOV.POLICY_EVENT (
@@ -268,6 +275,9 @@ def seed_policy_events(conn: ExaConnection) -> int:
         h = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()[:12]
         event_id = f"PE-{ev['key'][:20]}-{h}"
 
+        if event_id in existing_ids:
+            continue
+
         conn.execute(
             insert_sql,
             query_params={
@@ -282,6 +292,7 @@ def seed_policy_events(conn: ExaConnection) -> int:
                 "note": ev["note"],
             },
         )
+        existing_ids.add(event_id)
         rows_inserted += 1
 
     return rows_inserted
@@ -295,6 +306,7 @@ def load(
     """Load Parquet files from directory into Exasol tables.
 
     Connects as TALOS_LOADER if conn is None.
+    Idempotent: deletes matching load_ids or truncates table before loading.
     Returns mapping of table_name -> row_count.
     """
     directory = Path(directory)
@@ -314,10 +326,25 @@ def load(
             if not table_name:
                 continue
 
+            parquet_file = pq.ParquetFile(file_path)
+            schema_names = parquet_file.schema.names
+
+            # Idempotency: avoid doubling rows on re-load
+            if "load_id" in schema_names:
+                table_pydict = pq.read_table(file_path, columns=["load_id"]).to_pydict()
+                file_load_ids = set(table_pydict.get("load_id", []))
+                for lid in file_load_ids:
+                    conn.execute(
+                        f"DELETE FROM {table_name} WHERE load_id = {{lid}}",
+                        query_params={"lid": lid},
+                    )
+            else:
+                conn.execute(f"TRUNCATE TABLE {table_name}")
+
             row_iter = _iter_parquet_tuples(file_path)
-            # Use import_from_iterable
             conn.import_from_iterable(row_iter, table_name)
-            # Count rows or read count
+
+            # Count rows
             stmt = conn.execute(f"SELECT COUNT(*) FROM {table_name}")
             val = stmt.fetchval()
             results[table_name] = int(val) if val is not None else 0

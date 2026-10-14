@@ -219,7 +219,11 @@ def replay(run_id: str, conn: ExaConnection | None = None) -> ReplayResult:
 
         current_code_version = get_git_code_version()
         code_differs = (orig_code_version != current_code_version)
-        matches = (orig_hash == replay_result.output_hash)
+        orig_status = row.get("status") if isinstance(row, dict) else row[7]
+        if not orig_hash or not replay_result.output_hash or orig_status != "OK" or replay_result.status != "OK":
+            matches = False
+        else:
+            matches = (orig_hash == replay_result.output_hash)
 
         return ReplayResult(
             original_run_id=run_id,

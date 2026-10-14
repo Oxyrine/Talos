@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from pyexasol import ExaConnection
 
-from orchestrator.db import connect, run_sql_file
+from orchestrator.db import REPO_ROOT, connect, run_sql_file
 from orchestrator.policy import policy_in_force
 from orchestrator.replay import compute_output_hash, get_git_code_version
 
@@ -32,31 +32,30 @@ def _resolve_latest_load_id(
     date_col: str | None,
     business_date: str,
     known_at: str,
-) -> str | None:
+) -> str:
     """Find the latest load_id for a given raw table."""
-    try:
-        if date_col:
-            q = f"""
-            SELECT load_id FROM {table}
-            WHERE {date_col} = {{business_date}} AND loaded_at <= {{known_at}}
-            ORDER BY loaded_at DESC, load_id DESC
-            LIMIT 1
-            """
-            params = {"business_date": business_date, "known_at": known_at}
-        else:
-            q = f"""
-            SELECT load_id FROM {table}
-            WHERE loaded_at <= {{known_at}}
-            ORDER BY loaded_at DESC, load_id DESC
-            LIMIT 1
-            """
-            params = {"known_at": known_at}
+    if date_col:
+        q = f"""
+        SELECT load_id FROM {table}
+        WHERE {date_col} = {{business_date}} AND loaded_at <= {{known_at}}
+        ORDER BY loaded_at DESC, load_id DESC
+        LIMIT 1
+        """
+        params = {"business_date": business_date, "known_at": known_at}
+    else:
+        q = f"""
+        SELECT load_id FROM {table}
+        WHERE loaded_at <= {{known_at}}
+        ORDER BY loaded_at DESC, load_id DESC
+        LIMIT 1
+        """
+        params = {"known_at": known_at}
 
-        stmt = conn.execute(q, query_params=params)
-        val = stmt.fetchval()
-        return str(val) if val is not None else None
-    except Exception:
-        return None
+    stmt = conn.execute(q, query_params=params)
+    row = stmt.fetchone()
+    if not row or not row.get("load_id"):
+        raise ValueError(f"Could not resolve active load_id from {table} for {business_date} (known_at {known_at}).")
+    return str(row["load_id"])
 
 
 def _record_timing(
@@ -68,26 +67,23 @@ def _record_timing(
     started_at: datetime,
 ) -> None:
     """Record execution duration and row count in GOV.PIPELINE_TIMING."""
-    try:
-        started_str = started_at.strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute(
-            """
-            INSERT INTO GOV.PIPELINE_TIMING (
-                job_id, stage, rows_affected, seconds, started_at
-            ) VALUES (
-                {job_id}, {stage}, {rows_affected}, {seconds}, {started_at}
-            )
-            """,
-            query_params={
-                "job_id": job_id,
-                "stage": stage,
-                "rows_affected": rows_affected,
-                "seconds": round(seconds, 3),
-                "started_at": started_str,
-            },
+    started_str = started_at.strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        """
+        INSERT INTO GOV.PIPELINE_TIMING (
+            job_id, stage, rows_affected, seconds, started_at
+        ) VALUES (
+            {job_id}, {stage}, {rows_affected}, {seconds}, {started_at}
         )
-    except Exception:
-        pass
+        """,
+        query_params={
+            "job_id": job_id,
+            "stage": stage,
+            "rows_affected": rows_affected,
+            "seconds": round(seconds, 3),
+            "started_at": started_str,
+        },
+    )
 
 
 def publish_run(
@@ -96,18 +92,28 @@ def publish_run(
     manifest: dict | None = None,
     replay_of: str | None = None,
     conn: ExaConnection | None = None,
-    sql_dir: str | Path = "sql",
+    sql_dir: str | Path | None = None,
 ) -> RunResult:
     """Rebuild working state, execute Label Propagation, write GOV.RUN_*, and compute hash.
 
     Connects as TALOS_PIPELINE if conn is None.
+    Raises FileNotFoundError if required SQL files are missing.
     """
     close_conn = False
     if conn is None:
         conn = connect("pipeline", autocommit=True)
         close_conn = True
 
-    sql_path = Path(sql_dir)
+    if sql_dir is None:
+        sql_path = REPO_ROOT / "sql"
+    else:
+        sql_path = Path(sql_dir)
+        if not sql_path.is_absolute():
+            sql_path = REPO_ROOT / sql_path
+
+    if not sql_path.is_dir():
+        raise FileNotFoundError(f"SQL directory not found at {sql_path}")
+
     started_at = datetime.now(UTC)
     bd_str = business_date.isoformat() if isinstance(business_date, date) else str(business_date)
     if known_at is None:
@@ -118,10 +124,6 @@ def publish_run(
         known_str = known_dt.strftime("%Y-%m-%d %H:%M:%S")
     else:
         known_str = str(known_at)
-        try:
-            known_dt = datetime.fromisoformat(known_str)
-        except Exception:
-            known_dt = started_at
 
     now_tag = started_at.strftime("%Y%m%d%H%M%S")
     rand_hex = secrets.token_hex(2)
@@ -151,32 +153,31 @@ def publish_run(
             "known_at": known_str,
             "run_id": run_id,
             "baseline_run": run_id,
+            "los_load_id": load_ids.get("LOS", ""),
+            "tsy_load_id": load_ids.get("TSY", ""),
+            "gte_load_id": load_ids.get("GTE", ""),
+            "col_load_id": load_ids.get("COL", ""),
+            "reg_load_id": load_ids.get("REG", ""),
             **policy_values,
         }
 
-        # 1. 50_asof_links_edges.sql & 51_components_init.sql
-        if (sql_path / "50_asof_links_edges.sql").is_file():
-            run_sql_file(conn, sql_path / "50_asof_links_edges.sql", **params)
-        if (sql_path / "51_components_init.sql").is_file():
-            run_sql_file(conn, sql_path / "51_components_init.sql", **params)
+        # 1. Required stage: 50_asof_links_edges.sql & 51_components_init.sql
+        run_sql_file(conn, sql_path / "50_asof_links_edges.sql", **params)
+        run_sql_file(conn, sql_path / "51_components_init.sql", **params)
 
-        # 2. Loop 52_components_pass.sql
+        # 2. Required stage: Loop 52_components_pass.sql
         converged = False
         lp_passes = 0
         pass_file = sql_path / "52_components_pass.sql"
-        if pass_file.is_file():
-            while lp_passes < lp_max_passes:
-                lp_passes += 1
-                rowcounts = run_sql_file(conn, pass_file, **params)
-                total_mod = sum(rc for rc in rowcounts if rc > 0)
-                if total_mod == 0:
-                    converged = True
-                    break
-        else:
-            converged = True
+        while lp_passes < lp_max_passes:
+            lp_passes += 1
+            rowcounts = run_sql_file(conn, pass_file, **params)
+            total_mod = sum(rc for rc in rowcounts if rc > 0)
+            if total_mod == 0:
+                converged = True
+                break
 
         if not converged:
-            # LP failed to converge within limit
             finished_at = datetime.now(UTC)
             conn.execute(
                 """
@@ -213,9 +214,7 @@ def publish_run(
 
         # 3. Post-component stages: 60, 61, 62, 63
         for step in ["60_entity_exposure.sql", "61_membership.sql", "62_run_output.sql", "63_reported_baseline.sql"]:
-            target_f = sql_path / step
-            if target_f.is_file():
-                run_sql_file(conn, target_f, **params)
+            run_sql_file(conn, sql_path / step, **params)
 
         # 4. Hash and row count computation
         output_hash, row_count = compute_output_hash(conn, run_id)
@@ -267,12 +266,12 @@ def match(
     business_date: date | str,
     known_at: datetime | str | None = None,
     conn: ExaConnection | None = None,
-    sql_dir: str | Path = "sql",
+    sql_dir: str | Path | None = None,
 ) -> RunResult:
     """Execute the full matching pipeline and file new proposals.
 
     Connects as TALOS_PIPELINE if conn is None.
-    Records timings per stage into GOV.PIPELINE_TIMING.
+    Raises FileNotFoundError if required pipeline SQL files are missing.
     """
     from orchestrator.judge import run_t2
 
@@ -281,7 +280,16 @@ def match(
         conn = connect("pipeline", autocommit=True)
         close_conn = True
 
-    sql_path = Path(sql_dir)
+    if sql_dir is None:
+        sql_path = REPO_ROOT / "sql"
+    else:
+        sql_path = Path(sql_dir)
+        if not sql_path.is_absolute():
+            sql_path = REPO_ROOT / sql_path
+
+    if not sql_path.is_dir():
+        raise FileNotFoundError(f"SQL directory not found at {sql_path}")
+
     bd_str = business_date.isoformat() if isinstance(business_date, date) else str(business_date)
     if known_at is None:
         known_dt = datetime.now(UTC)
@@ -300,9 +308,8 @@ def match(
         total_rows = 0
         for f_name in sql_file_names:
             p = sql_path / f_name
-            if p.is_file():
-                rcs = run_sql_file(conn, p, **kwargs)
-                total_rows += sum(rc for rc in rcs if rc > 0)
+            rcs = run_sql_file(conn, p, **kwargs)
+            total_rows += sum(rc for rc in rcs if rc > 0)
         dur = time.time() - t0
         _record_timing(conn, job_id, stage_name, total_rows, dur, start_time)
         return total_rows
@@ -340,7 +347,7 @@ def match(
             business_date=bd_str,
             known_at=known_str,
             conn=conn,
-            sql_dir=sql_dir,
+            sql_dir=sql_path,
         )
 
         stage_params["baseline_run"] = baseline_run.run_id

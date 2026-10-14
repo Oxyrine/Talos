@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -44,6 +45,7 @@ if _HAS_PYEXASOL:
     pyexasol.ExaConnection.exasol_db_version = property(_safe_exasol_db_version)
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_SYS_CRED_PATH = Path.home() / ".exasol-starter-kit" / "credentials" / "nano_sys_password"
 _DEFAULT_DSN = "127.0.0.1:8563"
 
@@ -53,9 +55,13 @@ Role = Literal["sys", "loader", "pipeline", "approver", "reader", "eval"]
 def load_env_file(dotenv_path: str | Path | None = None) -> None:
     """Load variables from .env file into os.environ if not already set."""
     if dotenv_path is None:
-        dotenv_path = Path(".env")
+        dotenv_path = REPO_ROOT / ".env"
     else:
         dotenv_path = Path(dotenv_path)
+        if not dotenv_path.is_absolute() and not dotenv_path.is_file():
+            alt = REPO_ROOT / dotenv_path
+            if alt.is_file():
+                dotenv_path = alt
 
     if not dotenv_path.is_file():
         return
@@ -79,8 +85,9 @@ def load_env_file(dotenv_path: str | Path | None = None) -> None:
 def get_sys_password() -> str:
     """Resolve Exasol sys password from environment or credential file."""
     load_env_file()
-    if os.environ.get("EXASOL_PASSWORD"):
-        return os.environ["EXASOL_PASSWORD"].strip()
+    env_pass = os.environ.get("EXASOL_PASSWORD", "").strip()
+    if env_pass and not env_pass.startswith("change_me_"):
+        return env_pass
 
     cred_file_env = os.environ.get("EXASOL_SYS_PASSWORD_FILE")
     cred_path = Path(cred_file_env).expanduser() if cred_file_env else _DEFAULT_SYS_CRED_PATH
@@ -100,16 +107,13 @@ def get_role_password(role: Role) -> str:
         return get_sys_password()
 
     env_var = f"TALOS_{role.upper()}_PASSWORD"
-    if env_var in os.environ and os.environ[env_var].strip():
-        return os.environ[env_var].strip()
+    val = os.environ.get(env_var, "").strip()
+    if val and not val.startswith("change_me_"):
+        return val
 
-    # In dev/CI, fallback to sys password if role password not explicitly set
-    try:
-        return get_sys_password()
-    except Exception:
-        raise ValueError(
-            f"Password for role '{role}' not found in environment ({env_var}) and sys password unavailable."
-        )
+    raise ValueError(
+        f"Password for role '{role}' is not configured in {env_var}."
+    )
 
 
 def is_exasol_available() -> bool:
@@ -117,7 +121,8 @@ def is_exasol_available() -> bool:
     if not _HAS_PYEXASOL:
         return False
     load_env_file()
-    if os.environ.get("EXASOL_PASSWORD"):
+    env_pass = os.environ.get("EXASOL_PASSWORD", "").strip()
+    if env_pass and not env_pass.startswith("change_me_"):
         return True
     cred_file_env = os.environ.get("EXASOL_SYS_PASSWORD_FILE")
     cred_path = Path(cred_file_env).expanduser() if cred_file_env else _DEFAULT_SYS_CRED_PATH
@@ -130,7 +135,7 @@ def connect(
 ) -> pyexasol.ExaConnection:
     """Connect to Exasol Nano using role credentials and Circe TLS patches.
 
-    Never passes schema= at connect.
+    Enables fetch_dict=True and never passes schema= at connect.
     """
     if not _HAS_PYEXASOL:
         raise ImportError("pyexasol is not installed. Install with: pip install pyexasol")
@@ -145,6 +150,15 @@ def connect(
         user = f"TALOS_{role.upper()}"
         password = get_role_password(role)
 
+    is_localhost = any(dsn.startswith(prefix) for prefix in ("127.0.0.1", "localhost", "::1"))
+    insecure_tls = is_localhost or os.environ.get("EXASOL_INSECURE_TLS", "0") in ("1", "true", "True")
+    if not is_localhost and insecure_tls:
+        warnings.warn(
+            f"Connecting to remote host {dsn} with TLS certificate validation disabled.",
+            stacklevel=2,
+        )
+    sslopt = {"cert_reqs": 0} if insecure_tls else None
+
     try:
         conn = pyexasol.connect(
             dsn=dsn,
@@ -152,8 +166,9 @@ def connect(
             password=password,
             # DO NOT pass schema= here; all names in Talos are fully qualified.
             encryption=True,
-            websocket_sslopt={"cert_reqs": 0},
+            websocket_sslopt=sslopt,
             autocommit=autocommit,
+            fetch_dict=True,
         )
         return conn
     except Exception as e:
@@ -285,19 +300,29 @@ def split_sql(text: str) -> list[str]:
 
 
 def run_sql_file(conn: pyexasol.ExaConnection, path: str | Path, **params) -> list[int]:
-    """Execute SQL file with pyexasol query_params and return statement row counts."""
+    """Execute SQL file with pyexasol query_params and return statement row counts.
+
+    Always passes a dictionary (even if empty) so pyexasol unescapes doubled braces {{...}}.
+    """
     path = Path(path)
     if not path.is_file():
-        raise FileNotFoundError(f"SQL file not found at {path}")
+        alt = REPO_ROOT / path
+        if alt.is_file():
+            path = alt
+        else:
+            raise FileNotFoundError(f"Required SQL file not found at {path}")
 
     text = path.read_text(encoding="utf-8")
     statements = split_sql(text)
     row_counts: list[int] = []
 
+    # Always pass dictionary to trigger formatting and unescape doubled braces {{5}} -> {5}
+    query_params = dict(params)
+
     for stmt_sql in statements:
         if not stmt_sql.strip():
             continue
-        stmt = conn.execute(stmt_sql, query_params=params if params else None)
+        stmt = conn.execute(stmt_sql, query_params=query_params)
         row_counts.append(stmt.rowcount())
 
     return row_counts

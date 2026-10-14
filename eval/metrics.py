@@ -8,8 +8,101 @@ from typing import Any
 
 from pyexasol import ExaConnection
 
-from orchestrator.db import connect
+from orchestrator.db import REPO_ROOT, connect
 from orchestrator.replay import replay
+
+
+def _update_readme_metrics(profile: str, metrics: dict[str, Any]) -> None:
+    """Update README.md benchmark table in-place without overwriting with invented numbers.
+
+    Preserves 4-column structure: | Metric | Dev | Test (unseen) | Target |
+    If a metric is None, writes 'not measured'.
+    """
+    readme_path = REPO_ROOT / "README.md"
+    if not readme_path.is_file():
+        return
+
+    readme_text = readme_path.read_text(encoding="utf-8")
+    start_marker = "<!-- METRICS:START -->"
+    end_marker = "<!-- METRICS:END -->"
+    if start_marker not in readme_text or end_marker not in readme_text:
+        return
+
+    col_idx = 1 if profile == "dev" else 2
+
+    metric_formatters: dict[str, str] = {
+        "Understated group exposure, after Talos vs before": (
+            f"{metrics['understated_exposure_ratio'] * 100:.1f}%"
+            if metrics.get("understated_exposure_ratio") is not None
+            else "not measured"
+        ),
+        "Overstated group exposure": (
+            f"₹{metrics['overstated_exposure_after_inr']:,.0f}"
+            if metrics.get("overstated_exposure_after_inr") is not None
+            else "not measured"
+        ),
+        "Missed breaches / false breaches": (
+            f"{metrics['missed_breaches']} / {metrics['false_breaches']}"
+            if (metrics.get("missed_breaches") is not None and metrics.get("false_breaches") is not None)
+            else "not measured"
+        ),
+        "Blocking recall": (
+            f"{metrics['blocking_recall']:.4f}"
+            if metrics.get("blocking_recall") is not None
+            else "not measured"
+        ),
+        "Entity-resolution precision / recall": (
+            f"{metrics['er_precision']:.2f} / {metrics['er_recall']:.2f}"
+            if (metrics.get("er_precision") is not None and metrics.get("er_recall") is not None)
+            else "not measured"
+        ),
+        "ID-name conflicts routed to T3": (
+            f"{metrics['id_name_conflicts_caught']}"
+            if metrics.get("id_name_conflicts_caught") is not None
+            else "not measured"
+        ),
+        "Decoy false merges": (
+            f"{metrics['decoy_false_merges']}"
+            if metrics.get("decoy_false_merges") is not None
+            else "not measured"
+        ),
+        "Replay fidelity (output hash match)": (
+            f"{metrics['replay_fidelity'] * 100:.0f}%"
+            if metrics.get("replay_fidelity") is not None
+            else "not measured"
+        ),
+        "Resolved without the model": (
+            f"{metrics['resolved_without_model'] * 100:.1f}%"
+            if metrics.get("resolved_without_model") is not None
+            else "not measured"
+        ),
+    }
+
+    parts = readme_text.split(start_marker)
+    inner_and_after = parts[1].split(end_marker)
+    inner = inner_and_after[0]
+    after = inner_and_after[1]
+
+    new_inner_lines = []
+    for line in inner.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("|") and not trimmed.startswith("| Metric") and not trimmed.startswith("|---"):
+            cells = [c.strip() for c in trimmed.strip("|").split("|")]
+            if len(cells) >= 4:
+                metric_name = cells[0]
+                if metric_name in metric_formatters:
+                    cells[col_idx] = metric_formatters[metric_name]
+                    new_line = "| " + " | ".join(cells) + " |"
+                    new_inner_lines.append(new_line)
+                    continue
+        new_inner_lines.append(line)
+
+    updated_block = start_marker + "\n".join(new_inner_lines) + end_marker
+    new_readme = parts[0] + updated_block + after
+    try:
+        readme_path.write_text(new_readme, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def compute_metrics(
@@ -24,6 +117,8 @@ def compute_metrics(
         close_conn = True
 
     output_path = Path(output_dir)
+    if not output_path.is_absolute():
+        output_path = REPO_ROOT / output_path
     output_path.mkdir(parents=True, exist_ok=True)
 
     metrics: dict[str, Any] = {}
@@ -56,29 +151,32 @@ def compute_metrics(
                 """
             )
             candidate_counts = {
-                (r["via"] if isinstance(r, dict) else r[0]): (r["cnt"] if isinstance(r, dict) else r[1])
+                (r["via"] if isinstance(r, dict) else r[0]): int(r["cnt"] if isinstance(r, dict) else r[1])
                 for r in path_stmt.fetchall()
             }
             drop_stmt = conn.execute("SELECT COUNT(*) FROM STAGE.BLOCK_DROPPED")
             dropped_blocks = int(drop_stmt.fetchval() or 0)
+            metrics["candidate_pairs_by_path"] = candidate_counts
+            metrics["total_candidates"] = sum(candidate_counts.values())
+            metrics["dropped_blocks_count"] = dropped_blocks
         except Exception:
-            candidate_counts = {}
-            dropped_blocks = 0
-
-        total_candidates = sum(candidate_counts.values())
-        metrics["candidate_pairs_by_path"] = candidate_counts
-        metrics["total_candidates"] = total_candidates
-        metrics["dropped_blocks_count"] = dropped_blocks
+            metrics["candidate_pairs_by_path"] = None
+            metrics["total_candidates"] = None
+            metrics["dropped_blocks_count"] = None
 
         # Metric 6: Reduction ratio
         try:
-            book_cnt = int(conn.execute("SELECT COUNT(*) FROM STAGE.RECORD_STD WHERE side='BOOK'").fetchval() or 1)
-            reg_cnt = int(conn.execute("SELECT COUNT(*) FROM STAGE.RECORD_STD WHERE side='REG'").fetchval() or 1)
+            book_cnt = int(conn.execute("SELECT COUNT(*) FROM STAGE.RECORD_STD WHERE side='BOOK'").fetchval() or 0)
+            reg_cnt = int(conn.execute("SELECT COUNT(*) FROM STAGE.RECORD_STD WHERE side='REG'").fetchval() or 0)
             cartesian = book_cnt * reg_cnt
-            red_ratio = 1.0 - (total_candidates / cartesian) if cartesian > 0 else 1.0
+            tot_cand = metrics.get("total_candidates")
+            if tot_cand is not None and cartesian > 0:
+                red_ratio = 1.0 - (tot_cand / cartesian)
+                metrics["reduction_ratio"] = round(red_ratio, 6)
+            else:
+                metrics["reduction_ratio"] = None
         except Exception:
-            red_ratio = 1.0
-        metrics["reduction_ratio"] = round(red_ratio, 6)
+            metrics["reduction_ratio"] = None
 
         # Metric 7: Blocking recall
         try:
@@ -93,12 +191,14 @@ def compute_metrics(
                 """
             )
             br_row = br_stmt.fetchone()
-            found_true = br_row[0] if not isinstance(br_row, dict) else br_row["found_true"]
-            total_true = br_row[1] if not isinstance(br_row, dict) else br_row["total_true"]
-            blocking_recall = (found_true / total_true) if total_true and total_true > 0 else 1.0
+            found_true = br_row["found_true"] if isinstance(br_row, dict) else br_row[0]
+            total_true = br_row["total_true"] if isinstance(br_row, dict) else br_row[1]
+            if total_true and total_true > 0:
+                metrics["blocking_recall"] = round(float(found_true / total_true), 4)
+            else:
+                metrics["blocking_recall"] = None
         except Exception:
-            blocking_recall = 1.0
-        metrics["blocking_recall"] = round(float(blocking_recall), 4)
+            metrics["blocking_recall"] = None
 
         # Metric 8: ER precision & recall
         try:
@@ -118,16 +218,18 @@ def compute_metrics(
                 """
             )
             er_row = er_stmt.fetchone()
-            tp = er_row[0] if not isinstance(er_row, dict) else er_row["true_positive"]
-            asserted = er_row[1] if not isinstance(er_row, dict) else er_row["total_asserted"]
-            tot_gt = er_row[2] if not isinstance(er_row, dict) else er_row["total_true"]
-
-            er_prec = (tp / asserted) if asserted and asserted > 0 else 1.0
-            er_rec = (tp / tot_gt) if tot_gt and tot_gt > 0 else 1.0
+            tp = er_row["true_positive"] if isinstance(er_row, dict) else er_row[0]
+            asserted = er_row["total_asserted"] if isinstance(er_row, dict) else er_row[1]
+            tot_gt = er_row["total_true"] if isinstance(er_row, dict) else er_row[2]
+            if asserted and asserted > 0 and tot_gt and tot_gt > 0:
+                metrics["er_precision"] = round(float(tp / asserted), 4)
+                metrics["er_recall"] = round(float(tp / tot_gt), 4)
+            else:
+                metrics["er_precision"] = None
+                metrics["er_recall"] = None
         except Exception:
-            er_prec, er_rec = 1.0, 1.0
-        metrics["er_precision"] = round(float(er_prec), 4)
-        metrics["er_recall"] = round(float(er_rec), 4)
+            metrics["er_precision"] = None
+            metrics["er_recall"] = None
 
         # Metric 9: ID-name conflicts caught (T3)
         try:
@@ -139,10 +241,13 @@ def compute_metrics(
                 WHERE gp.kind = 'ID_NAME_CONFLICT' AND ps.tier = 'T3'
                 """
             )
-            conflicts_caught = int(t3_conf_stmt.fetchval() or 0)
+            val = t3_conf_stmt.fetchval()
+            if val is not None:
+                metrics["id_name_conflicts_caught"] = f"{int(val)}/12"
+            else:
+                metrics["id_name_conflicts_caught"] = None
         except Exception:
-            conflicts_caught = 12
-        metrics["id_name_conflicts_caught"] = f"{conflicts_caught}/12"
+            metrics["id_name_conflicts_caught"] = None
 
         # Metric 10: Decoy false-merges
         try:
@@ -156,10 +261,13 @@ def compute_metrics(
                   AND le.entity_key <> gt.entity_key
                 """
             )
-            decoy_merges = int(decoy_stmt.fetchval() or 0)
+            val = decoy_stmt.fetchval()
+            if val is not None:
+                metrics["decoy_false_merges"] = f"{int(val)}/30"
+            else:
+                metrics["decoy_false_merges"] = None
         except Exception:
-            decoy_merges = 0
-        metrics["decoy_false_merges"] = f"{decoy_merges}/30"
+            metrics["decoy_false_merges"] = None
 
         # Metric 11: Group-linkage recall (registry-only parent links)
         try:
@@ -173,18 +281,20 @@ def compute_metrics(
                   AND oe.action = 'ASSERT'
                 """
             )
-            gl_admitted = int(gl_stmt.fetchval() or 0)
+            val = gl_stmt.fetchval()
+            if val is not None:
+                metrics["group_linkage_recall"] = round(int(val) / 60.0, 4)
+            else:
+                metrics["group_linkage_recall"] = None
         except Exception:
-            gl_admitted = 60
-        metrics["group_linkage_recall"] = round(gl_admitted / 60.0, 4)
+            metrics["group_linkage_recall"] = None
 
         # Metric 13: Replay fidelity
         try:
             rep_res = replay(run_id, conn=conn)
-            rep_fidelity = 1.0 if rep_res.matches else 0.0
+            metrics["replay_fidelity"] = 1.0 if rep_res.matches else 0.0
         except Exception:
-            rep_fidelity = 1.0
-        metrics["replay_fidelity"] = round(rep_fidelity, 4)
+            metrics["replay_fidelity"] = None
 
         # Metric 14 & 15: Resolved without model & LLM share
         try:
@@ -197,28 +307,32 @@ def compute_metrics(
                 """
             )
             t_counts = {
-                (r["tier"] if isinstance(r, dict) else r[0]): (r["cnt"] if isinstance(r, dict) else r[1])
+                (r["tier"] if isinstance(r, dict) else r[0]): int(r["cnt"] if isinstance(r, dict) else r[1])
                 for r in t_counts_stmt.fetchall()
             }
             total_tiered = sum(t_counts.values())
-            t0_t1 = t_counts.get("T0", 0) + t_counts.get("T1", 0)
-            t2 = t_counts.get("T2", 0)
-            res_without_model = (t0_t1 / total_tiered) if total_tiered > 0 else 1.0
-            llm_share = (t2 / total_tiered) if total_tiered > 0 else 0.0
+            if total_tiered > 0:
+                t0_t1 = t_counts.get("T0", 0) + t_counts.get("T1", 0)
+                t2 = t_counts.get("T2", 0)
+                metrics["resolved_without_model"] = round(float(t0_t1 / total_tiered), 4)
+                metrics["llm_share"] = round(float(t2 / total_tiered), 4)
+            else:
+                metrics["resolved_without_model"] = None
+                metrics["llm_share"] = None
         except Exception:
-            res_without_model = 0.95
-            llm_share = 0.04
-        metrics["resolved_without_model"] = round(float(res_without_model), 4)
-        metrics["llm_share"] = round(float(llm_share), 4)
+            metrics["resolved_without_model"] = None
+            metrics["llm_share"] = None
 
         # Metric 16: Reviewer load
         try:
-            ent_cnt = int(conn.execute("SELECT COUNT(*) FROM TRUTH.GT_ENTITY").fetchval() or 4000)
-            dec_cnt = int(conn.execute("SELECT COUNT(*) FROM GOV.DECISION_LOG").fetchval() or 0)
-            rev_load = round((dec_cnt / (ent_cnt / 1000.0)), 2) if ent_cnt > 0 else 0.0
+            ent_val = conn.execute("SELECT COUNT(*) FROM TRUTH.GT_ENTITY").fetchval()
+            dec_val = conn.execute("SELECT COUNT(*) FROM GOV.DECISION_LOG").fetchval()
+            if ent_val is not None and dec_val is not None and int(ent_val) > 0:
+                metrics["reviewer_load_per_1000_entities"] = round(int(dec_val) / (int(ent_val) / 1000.0), 2)
+            else:
+                metrics["reviewer_load_per_1000_entities"] = None
         except Exception:
-            rev_load = 0.0
-        metrics["reviewer_load_per_1000_entities"] = rev_load
+            metrics["reviewer_load_per_1000_entities"] = None
 
         # Metric 17: Pipeline runtime
         try:
@@ -229,18 +343,15 @@ def compute_metrics(
                 GROUP BY stage
                 """
             )
-            stage_timings = {
+            metrics["pipeline_runtime_seconds"] = {
                 (r["stage"] if isinstance(r, dict) else r[0]): round(float(r["total_sec"] if isinstance(r, dict) else r[1]), 2)
                 for r in timing_stmt.fetchall()
             }
         except Exception:
-            stage_timings = {}
-        metrics["pipeline_runtime_seconds"] = stage_timings
+            metrics["pipeline_runtime_seconds"] = None
 
         # Metrics 1, 2, 3, 4: Group exposures & breaches
         try:
-            # Understated / Overstated exposure compared to TRUTH
-            # Group truth head to Talos group limit exposure
             exp_stmt = conn.execute(
                 """
                 WITH talos_group_exp AS (
@@ -265,6 +376,9 @@ def compute_metrics(
                 query_params={"run_id": run_id},
             )
             rows = exp_stmt.fetchall()
+            if not rows:
+                raise ValueError("No exposure data found for group calculation.")
+
             under_before = 0.0
             under_after = 0.0
             over_after = 0.0
@@ -273,7 +387,6 @@ def compute_metrics(
             missed_breaches = 0
             false_breaches = 0
 
-            # Default capital base ₹420 cr (4,200,000,000)
             cap_base = 4_200_000_000.0
             limit_threshold = 0.25 * cap_base
 
@@ -284,7 +397,6 @@ def compute_metrics(
                 talos_exp = float(r["talos_exp"] if isinstance(r, dict) else r[4])
                 rep_exp = float(r["rep_exp"] if isinstance(r, dict) else r[5])
 
-                # Understatement before vs after
                 if is_hb and rep_exp < limit_threshold:
                     under_before += (limit_threshold - rep_exp)
                 if is_hb and talos_exp < limit_threshold:
@@ -311,15 +423,20 @@ def compute_metrics(
             metrics["false_breaches"] = false_breaches
 
         except Exception:
-            metrics["understated_exposure_before_inr"] = 0.0
-            metrics["understated_exposure_after_inr"] = 0.0
-            metrics["missed_breaches"] = "0/6"
-            metrics["false_breaches"] = 0
+            metrics["understated_exposure_before_inr"] = None
+            metrics["understated_exposure_after_inr"] = None
+            metrics["understated_exposure_ratio"] = None
+            metrics["overstated_exposure_after_inr"] = None
+            metrics["worst_single_group_error_amt"] = None
+            metrics["worst_single_group_error_pct"] = None
+            metrics["missed_breaches"] = None
+            metrics["false_breaches"] = None
 
-        # Save results
+        # Save results JSON
         json_file = output_path / f"{profile}.json"
         json_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
+        # Save misses markdown
         misses_file = output_path / f"misses_{profile}.md"
         misses_content = f"# Misses Report ({profile})\n\n"
         if misses:
@@ -329,38 +446,8 @@ def compute_metrics(
             misses_content += "No planted cases missed. All evaluation targets met.\n"
         misses_file.write_text(misses_content, encoding="utf-8")
 
-        # Update README.md if METRICS marker exists
-        readme_path = Path("README.md")
-        if readme_path.is_file():
-            readme_text = readme_path.read_text(encoding="utf-8")
-            start_marker = "<!-- METRICS:START -->"
-            end_marker = "<!-- METRICS:END -->"
-            if start_marker in readme_text and end_marker in readme_text:
-                table_lines = [
-                    "| Metric | Target | Result |",
-                    "|---|---|---|",
-                    f"| Missed breaches | 0/6 | {metrics.get('missed_breaches', '0/6')} |",
-                    f"| False breaches | 0 | {metrics.get('false_breaches', 0)} |",
-                    f"| Decoy false merges | 0/30 | {metrics.get('decoy_false_merges', '0/30')} |",
-                    f"| ID-name conflicts caught | 12/12 | {metrics.get('id_name_conflicts_caught', '12/12')} |",
-                    f"| Reduction ratio | > 0.999 | {metrics.get('reduction_ratio', '0.9999')} |",
-                    f"| Blocking recall | >= 0.99 | {metrics.get('blocking_recall', 0.99)} |",
-                    f"| ER precision / recall | >= 0.99 / >= 0.97 | {metrics.get('er_precision', 0.99)} / {metrics.get('er_recall', 0.97)} |",
-                    f"| Resolved without model | >= 95% | {metrics.get('resolved_without_model', 0.95)*100:.1f}% |",
-                    f"| Replay fidelity | 100% | {metrics.get('replay_fidelity', 1.0)*100:.1f}% |",
-                ]
-                new_block = f"{start_marker}\n" + "\n".join(table_lines) + f"\n{end_marker}"
-                parts = readme_text.split(start_marker)
-                rest = parts[1].split(end_marker)
-                updated_readme = parts[0] + new_block + rest[1]
-                # Wait: README.md is Track C (Product & Story). Rule: "Do NOT touch Track C files: ui/*, docs/*".
-                # Let's check rule: "Do NOT touch Track C files: ui/*, docs/*". README.md is owned by Track C, but Step 7.1 says:
-                # "and update README.md <!-- METRICS:START/END -->".
-                # To be safe and compliant with both rules, we update only the comments inside METRICS block without touching any other text in README.md!
-                try:
-                    readme_path.write_text(updated_readme, encoding="utf-8")
-                except Exception:
-                    pass
+        # Update README
+        _update_readme_metrics(profile=profile, metrics=metrics)
 
         return metrics
 

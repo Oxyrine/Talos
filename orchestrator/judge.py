@@ -307,18 +307,23 @@ def run_t2(conn: ExaConnection | None = None) -> int:
         close_conn = True
 
     model_config = os.environ.get("TALOS_JUDGE", "stub")
+    if model_config not in PROVIDERS:
+        raise ValueError(
+            f"Unknown TALOS_JUDGE '{model_config}'. Registered providers: {list(PROVIDERS.keys())}"
+        )
+
     thresholds = load_thresholds()
-    min_conf = float(thresholds.get("JUDGE_MIN_CONF", 0.80))
+    min_conf = float(thresholds["JUDGE_MIN_CONF"])
 
     try:
-        # Check if table exists
         stmt = conn.execute(
             """
             SELECT p.pair_key, ra.name_std as name_a, rb.name_std as name_b,
                    ra.pincode as pin_a, rb.pincode as pin_b,
                    ra.district as dist_a, rb.district as dist_b,
                    ra.source_system as src_a, rb.source_system as src_b,
-                   p.conflict_types, p.id_agree, p.id_conflict
+                   p.via, p.conflict_types, p.id_agree, p.id_conflict,
+                   ra.director_tok as din_a, rb.director_tok as din_b
             FROM RESOLVE.PAIR_SCORE p
             JOIN STAGE.RECORD_STD ra ON p.rec_a = ra.rec_key
             JOIN STAGE.RECORD_STD rb ON p.rec_b = rb.rec_key
@@ -331,17 +336,42 @@ def run_t2(conn: ExaConnection | None = None) -> int:
 
         packets: list[tuple[dict[str, Any], str, str]] = []
         for r in t2_rows:
-            pair_k = r["pair_key"] if isinstance(r, dict) else r[0]
-            name_a = r["name_a"] if isinstance(r, dict) else r[1]
-            name_b = r["name_b"] if isinstance(r, dict) else r[2]
-            pin_a = r["pin_a"] if isinstance(r, dict) else r[3]
-            pin_b = r["pin_b"] if isinstance(r, dict) else r[4]
-            dist_a = r["dist_a"] if isinstance(r, dict) else r[5]
-            dist_b = r["dist_b"] if isinstance(r, dict) else r[6]
-            src_a = r["src_a"] if isinstance(r, dict) else r[7]
-            src_b = r["src_b"] if isinstance(r, dict) else r[8]
+            pair_k = r["pair_key"]
+            name_a = r["name_a"]
+            name_b = r["name_b"]
+            pin_a = r["pin_a"]
+            pin_b = r["pin_b"]
+            dist_a = r["dist_a"]
+            dist_b = r["dist_b"]
+            src_a = r["src_a"]
+            src_b = r["src_b"]
 
+            # Compute real id_status from candidate pair scoring
             id_status = {"PAN": "missing", "CIN": "missing", "LEI": "missing"}
+            conflict_types = r.get("conflict_types")
+            if conflict_types:
+                for ct in str(conflict_types).split(","):
+                    ct = ct.strip()
+                    if ct in id_status:
+                        id_status[ct] = "disagree"
+
+            via_str = str(r.get("via", ""))
+            if "PAN" in via_str and id_status["PAN"] != "disagree":
+                id_status["PAN"] = "agree"
+            if "CIN" in via_str and id_status["CIN"] != "disagree":
+                id_status["CIN"] = "agree"
+            if "LEI" in via_str and id_status["LEI"] != "disagree":
+                id_status["LEI"] = "agree"
+
+            # Compute real director DIN overlap
+            d_overlap = 0
+            din_a = str(r.get("din_a") or "")
+            din_b = str(r.get("din_b") or "")
+            if din_a and din_b:
+                set_a = {tok.strip() for tok in din_a.split(";") if tok.strip()}
+                set_b = {tok.strip() for tok in din_b.split(";") if tok.strip()}
+                d_overlap = len(set_a & set_b)
+
             pkt = build_privacy_safe_packet(
                 pair_id=pair_k,
                 name_a_std=name_a or "",
@@ -351,7 +381,7 @@ def run_t2(conn: ExaConnection | None = None) -> int:
                 district_a=dist_a,
                 district_b=dist_b,
                 id_status=id_status,
-                director_overlap=0,
+                director_overlap=d_overlap,
                 source_a=src_a or "BOOK",
                 source_b=src_b or "REG",
             )
@@ -366,9 +396,7 @@ def run_t2(conn: ExaConnection | None = None) -> int:
             """,
             query_params={"model": model_config},
         )
-        cached_hashes = {
-            r["packet_hash"] if isinstance(r, dict) else r[0] for r in existing_stmt.fetchall()
-        }
+        cached_hashes = {r["packet_hash"] for r in existing_stmt.fetchall()}
 
         to_evaluate = [p for p in packets if p[1] not in cached_hashes]
         if not to_evaluate:
@@ -423,8 +451,6 @@ def run_t2(conn: ExaConnection | None = None) -> int:
 
         return len(to_evaluate)
 
-    except Exception:
-        return 0
     finally:
         if close_conn:
             conn.close()

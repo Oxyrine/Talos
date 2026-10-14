@@ -2,6 +2,8 @@
 
 import random
 
+import pytest
+
 from orchestrator.decide import calculate_sample_size
 
 
@@ -34,7 +36,17 @@ def test_sample_size_calculation_ownership():
     assert calculate_sample_size(2000, "OWNERSHIP", policy) == 40
 
 
+def test_sample_size_strictly_requires_policy():
+    """DEV-13: calculate_sample_size must not fall back to defaults."""
+    with pytest.raises(KeyError):
+        calculate_sample_size(1912, "RECORD_LINK", {})
+
+    with pytest.raises(KeyError):
+        calculate_sample_size(500, "OWNERSHIP", {})
+
+
 def test_sampling_determinism():
+    """Verify that seeded RNG sampling over sorted proposal IDs is exactly reproducible."""
     items = [f"P-{i:05d}" for i in range(500)]
     seed = 20261008
 
