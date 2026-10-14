@@ -1,7 +1,381 @@
-"""Talos CLI entry point."""
+"""orchestrator/cli.py: Main CLI entry point for Talos."""
+
+from __future__ import annotations
 
 import argparse
+import getpass
+import hashlib
+import json
+import os
+import secrets
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from orchestrator.db import connect, load_env_file, run_sql_file
+from orchestrator.loader import load
+from orchestrator.pipeline import match, publish_run
+from orchestrator.replay import replay
+
+
+def _cmd_probe(args: argparse.Namespace) -> int:
+    """Run capability probe against Exasol Nano and report results."""
+    print("Running capability probe against Exasol Nano...")
+    try:
+        conn = connect("sys", autocommit=True)
+    except Exception as e:
+        print(f"Failed to connect to Exasol as SYS: {e}", file=sys.stderr)
+        return 1
+
+    probe_sql = Path("sql/00_probe.sql")
+    if probe_sql.is_file():
+        try:
+            rcs = run_sql_file(conn, probe_sql)
+            print(f"Probe executed successfully: {len(rcs)} statements run.")
+        except Exception as e:
+            print(f"Probe statements failed: {e}", file=sys.stderr)
+            conn.close()
+            return 1
+    else:
+        # Fallback inline probes
+        probes = [
+            ("Version & Current timestamp", "SELECT CURRENT_TIMESTAMP"),
+            ("HASH_SHA256", "SELECT HASH_SHA256('PAN:ABCDE1234F')"),
+            ("SOUNDEX & COLOGNE", "SELECT SOUNDEX('SUNRISE'), COLOGNE_PHONETIC('SUNRISE')"),
+            ("EDIT_DISTANCE", "SELECT EDIT_DISTANCE('SUNRISE', 'SUNRIZE')"),
+        ]
+        for name, query in probes:
+            try:
+                res = conn.execute(query).fetchone()
+                print(f"[PASS] {name}: {res}")
+            except Exception as e:
+                print(f"[FAIL] {name}: {e}")
+
+    conn.close()
+    return 0
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    """Initialize Exasol schemas, roles, users, and DDL."""
+    print("Initializing Talos database...")
+    load_env_file()
+    roles = ["loader", "pipeline", "approver", "reader", "eval"]
+    env_path = Path(".env")
+    existing_env: dict[str, str] = {}
+    if env_path.is_file():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                existing_env[k.strip()] = v.strip().strip("'\"")
+
+    new_passwords = False
+    for r in roles:
+        env_key = f"TALOS_{r.upper()}_PASSWORD"
+        if env_key not in existing_env:
+            existing_env[env_key] = secrets.token_urlsafe(24)
+            new_passwords = True
+            os.environ[env_key] = existing_env[env_key]
+
+    if "TALOS_SESSION_SECRET" not in existing_env:
+        existing_env["TALOS_SESSION_SECRET"] = secrets.token_urlsafe(32)
+        new_passwords = True
+    if "TALOS_JUDGE" not in existing_env:
+        existing_env["TALOS_JUDGE"] = "stub"
+        new_passwords = True
+    if "EXASOL_DSN" not in existing_env:
+        existing_env["EXASOL_DSN"] = "127.0.0.1:8563"
+        new_passwords = True
+
+    if new_passwords:
+        out_content = "\n".join(f"{k}={v}" for k, v in existing_env.items()) + "\n"
+        env_path.write_text(out_content, encoding="utf-8")
+        print(f"Updated {env_path} with role passwords and configuration.")
+
+    try:
+        conn = connect("sys", autocommit=True)
+    except Exception as e:
+        print(f"Could not connect as SYS: {e}", file=sys.stderr)
+        return 1
+
+    # Run DDL scripts
+    sql_files = [
+        "01_schemas.sql",
+        "02_raw.sql",
+        "03_stage_resolve.sql",
+        "04_graph_gov.sql",
+        "05_truth.sql",
+        "06_roles_grants.sql",
+        "80_graph_views.sql",
+        "81_report_views.sql",
+    ]
+
+    for fname in sql_files:
+        fpath = Path("sql") / fname
+        if fpath.is_file():
+            print(f"Running {fpath}...")
+            # Pass role passwords for 06_roles_grants.sql
+            params = {f"pwd_{r}": existing_env[f"TALOS_{r.upper()}_PASSWORD"] for r in roles}
+            try:
+                run_sql_file(conn, fpath, **params)
+            except Exception as e:
+                print(f"Error running {fname}: {e}", file=sys.stderr)
+                conn.close()
+                return 1
+
+    conn.close()
+    print("Talos database initialized successfully.")
+    return 0
+
+
+def _cmd_reset(args: argparse.Namespace) -> int:
+    """Drop and re-initialize all Talos schemas."""
+    print("Resetting all Talos schemas...")
+    try:
+        conn = connect("sys", autocommit=True)
+    except Exception as e:
+        print(f"Could not connect as SYS: {e}", file=sys.stderr)
+        return 1
+
+    schemas = [
+        "RAW_LOS",
+        "RAW_TREASURY",
+        "RAW_GUARANTEE",
+        "RAW_COLLATERAL",
+        "RAW_REGISTRY",
+        "STAGE",
+        "RESOLVE",
+        "GRAPH",
+        "GOV",
+        "REPORT",
+        "TRUTH",
+    ]
+
+    for s in schemas:
+        try:
+            conn.execute(f"DROP SCHEMA IF EXISTS {s} CASCADE")
+        except Exception as e:
+            print(f"Warning dropping {s}: {e}")
+
+    conn.close()
+    return _cmd_init(args)
+
+
+def _cmd_generate(args: argparse.Namespace) -> int:
+    """Generate synthetic dataset."""
+    profile = args.profile
+    out_dir = args.out or f"data/out/{profile}"
+    print(f"Generating synthetic dataset (profile: {profile}) into {out_dir}...")
+    try:
+        from data.generator.generate import generate
+        generate(profile=profile, out_dir=out_dir, scale=args.scale, seed=args.seed)
+        print("Generation complete.")
+        return 0
+    except ImportError:
+        print("Generator module not yet available in data/generator/generate.py", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Generation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_load(args: argparse.Namespace) -> int:
+    """Load parquet files into Exasol tables."""
+    target_dir = args.dir
+    print(f"Loading datasets from {target_dir} into Exasol...")
+    try:
+        results = load(target_dir)
+        print("Load finished:")
+        for tbl, count in results.items():
+            print(f"  {tbl}: {count} rows")
+        return 0
+    except Exception as e:
+        print(f"Load failed: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_match(args: argparse.Namespace) -> int:
+    """Run matching pipeline."""
+    bd = args.business_date
+    known_at = args.known_at
+    print(f"Executing matching pipeline for business date {bd}...")
+    try:
+        res = match(business_date=bd, known_at=known_at)
+        print(f"Match complete. Baseline report run: {res.run_id} (hash: {res.output_hash})")
+        return 0
+    except Exception as e:
+        print(f"Match pipeline failed: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_publish(args: argparse.Namespace) -> int:
+    """Publish a report run."""
+    bd = args.business_date
+    known_at = args.known_at
+    print(f"Publishing report run for business date {bd}...")
+    try:
+        res = publish_run(business_date=bd, known_at=known_at)
+        print(f"Published run {res.run_id}: status={res.status}, hash={res.output_hash}, rows={res.row_count}")
+        return 0
+    except Exception as e:
+        print(f"Publish run failed: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    """Replay a report run or all historical runs."""
+    run_id = args.run_id
+    if args.all:
+        try:
+            conn = connect("pipeline", autocommit=True)
+            stmt = conn.execute("SELECT run_id FROM GOV.REPORT_RUN WHERE replay_of IS NULL ORDER BY run_id")
+            runs = [r[0] if not isinstance(r, dict) else r["run_id"] for r in stmt.fetchall()]
+            conn.close()
+        except Exception as e:
+            print(f"Failed to query runs: {e}", file=sys.stderr)
+            return 1
+        all_passed = True
+        for rid in runs:
+            res = replay(rid)
+            status = "MATCH" if res.matches else "MISMATCH"
+            print(f"Replay {rid}: {status} (differs={res.code_version_differs})")
+            if not res.matches:
+                all_passed = False
+        return 0 if all_passed else 1
+    elif run_id:
+        res = replay(run_id)
+        if res.matches:
+            print(f"Replay SUCCESS for {run_id}. Hash verified: {res.replay_hash}")
+            return 0
+        else:
+            print(f"Replay FAILED for {run_id}. Original: {res.original_hash}, Replay: {res.replay_hash}", file=sys.stderr)
+            return 1
+    else:
+        print("Specify a run_id or --all", file=sys.stderr)
+        return 1
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    """Execute full evaluation benchmark."""
+    profile = args.profile
+    print(f"Executing evaluation benchmark for profile {profile}...")
+    try:
+        from eval.metrics import compute_metrics
+        from eval.oracle import run_oracle
+
+        # 1. Reset
+        _cmd_reset(args)
+
+        # 2. Generate
+        out_dir = f"data/out/{profile}"
+        try:
+            from data.generator.generate import generate
+            generate(profile=profile, out_dir=out_dir)
+        except ImportError:
+            pass
+
+        # 3. Load
+        load(out_dir)
+
+        # 4. Match
+        match("2026-09-30")
+
+        # 5. Oracle
+        run_oracle()
+
+        # 6. Metrics
+        metrics = compute_metrics(profile=profile)
+        print("Evaluation complete:")
+        print(json.dumps(metrics, indent=2))
+        return 0
+    except Exception as e:
+        print(f"Evaluation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_add_reviewer(args: argparse.Namespace) -> int:
+    """Register a human reviewer with scrypt password hash."""
+    name = args.name
+    role = args.role.upper()
+    if role not in ("APPROVER", "ANALYST"):
+        print("Role must be APPROVER or ANALYST", file=sys.stderr)
+        return 1
+
+    password = args.password
+    if not password:
+        password = getpass.getpass(f"Enter password for reviewer {name}: ")
+        confirm = getpass.getpass("Confirm password: ")
+        if password != confirm:
+            print("Passwords do not match.", file=sys.stderr)
+            return 1
+
+    salt = secrets.token_bytes(16)
+    hashed = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=16384, r=8, p=1)
+
+    reviewers_dir = Path(".talos")
+    reviewers_dir.mkdir(parents=True, exist_ok=True)
+    reviewers_file = reviewers_dir / "reviewers.json"
+
+    reviewers: dict[str, Any] = {}
+    if reviewers_file.is_file():
+        try:
+            reviewers = json.loads(reviewers_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    reviewers[name] = {
+        "name": name,
+        "role": role,
+        "salt": salt.hex(),
+        "hash": hashed.hex(),
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    reviewers_file.write_text(json.dumps(reviewers, indent=2), encoding="utf-8")
+    print(f"Reviewer '{name}' ({role}) registered successfully.")
+    return 0
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Start web console."""
+    import uvicorn
+    host = args.host
+    port = args.port
+    print(f"Starting Talos Web Console on http://{host}:{port}...")
+    uvicorn.run("ui.app:app", host=host, port=port, reload=False)
+    return 0
+
+
+def _cmd_demo(args: argparse.Namespace) -> int:
+    """Execute end-to-end demo flow."""
+    print("========================================")
+    print("      TALOS - END-TO-END DEMO SETUP     ")
+    print("========================================")
+
+    # 1. Reset
+    print("\n[Step 1/5] Resetting schemas...")
+    _cmd_reset(args)
+
+    # 2. Generate dev
+    print("\n[Step 2/5] Generating dev dataset...")
+    out_dir = "data/out/dev"
+    try:
+        from data.generator.generate import generate
+        generate(profile="dev", out_dir=out_dir)
+    except ImportError:
+        print("Generator module not found; checking existing parquet files in data/out/dev...")
+
+    # 3. Load
+    print("\n[Step 3/5] Loading data into Exasol...")
+    load(out_dir)
+
+    # 4. Match
+    print("\n[Step 4/5] Running entity resolution matching pipeline...")
+    match("2026-09-30")
+
+    # 5. Serve
+    print("\n[Step 5/5] Launching web server...")
+    return _cmd_serve(args)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -11,20 +385,88 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers = parser.add_subparsers(dest="command", help="Subcommands")
 
+    # probe
     subparsers.add_parser("probe", help="Run capability probe against Exasol Nano")
+
+    # init
     subparsers.add_parser("init", help="Initialize Exasol users, roles, and schemas")
+
+    # reset
     subparsers.add_parser("reset", help="Drop and re-initialize all Talos schemas")
-    subparsers.add_parser("match", help="Run entity resolution matching pipeline")
-    subparsers.add_parser("serve", help="Start web console on 127.0.0.1:8000")
-    subparsers.add_parser("demo", help="End-to-end demo execution")
+
+    # generate
+    gen_p = subparsers.add_parser("generate", help="Generate synthetic dataset")
+    gen_p.add_argument("--profile", choices=["dev", "test", "scale", "tiny"], default="dev")
+    gen_p.add_argument("--scale", type=float, default=1.0)
+    gen_p.add_argument("--seed", type=int, default=None)
+    gen_p.add_argument("--seed-from-commit", dest="seed_from_commit", type=str, default=None)
+    gen_p.add_argument("--out", type=str, default=None)
+
+    # load
+    load_p = subparsers.add_parser("load", help="Load parquet directory into Exasol tables")
+    load_p.add_argument("dir", type=str, help="Directory containing parquet files")
+
+    # match
+    match_p = subparsers.add_parser("match", help="Run entity resolution matching pipeline")
+    match_p.add_argument("--business-date", default="2026-09-30")
+    match_p.add_argument("--known-at", default=None)
+
+    # publish
+    pub_p = subparsers.add_parser("publish", help="Publish a report run")
+    pub_p.add_argument("--business-date", default="2026-09-30")
+    pub_p.add_argument("--known-at", default=None)
+
+    # replay
+    rep_p = subparsers.add_parser("replay", help="Replay a historical report run and verify hash")
+    rep_p.add_argument("run_id", nargs="?", default=None, help="Specific run ID to replay")
+    rep_p.add_argument("--all", action="store_true", help="Replay all historical runs")
+
+    # eval
+    eval_p = subparsers.add_parser("eval", help="Execute benchmark evaluation and write metrics")
+    eval_p.add_argument("--profile", choices=["dev", "test"], default="dev")
+
+    # add-reviewer
+    rev_p = subparsers.add_parser("add-reviewer", help="Register a reviewer with scrypt password hash")
+    rev_p.add_argument("name", help="Reviewer name")
+    rev_p.add_argument("--role", choices=["APPROVER", "ANALYST"], default="APPROVER")
+    rev_p.add_argument("--password", default=None, help="Password (prompted if omitted)")
+
+    # serve
+    srv_p = subparsers.add_parser("serve", help="Start web console on 127.0.0.1:8000")
+    srv_p.add_argument("--host", default="127.0.0.1")
+    srv_p.add_argument("--port", type=int, default=8000)
+
+    # demo
+    demo_p = subparsers.add_parser("demo", help="End-to-end demo execution")
+    demo_p.add_argument("--host", default="127.0.0.1")
+    demo_p.add_argument("--port", type=int, default=8000)
 
     args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()
         return 0
 
-    print(f"Talos command '{args.command}' invoked.")
-    return 0
+    commands = {
+        "probe": _cmd_probe,
+        "init": _cmd_init,
+        "reset": _cmd_reset,
+        "generate": _cmd_generate,
+        "load": _cmd_load,
+        "match": _cmd_match,
+        "publish": _cmd_publish,
+        "replay": _cmd_replay,
+        "eval": _cmd_eval,
+        "add-reviewer": _cmd_add_reviewer,
+        "serve": _cmd_serve,
+        "demo": _cmd_demo,
+    }
+
+    cmd_fn = commands.get(args.command)
+    if cmd_fn:
+        return cmd_fn(args)
+    else:
+        parser.print_help()
+        return 1
 
 
 if __name__ == "__main__":

@@ -11,8 +11,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      # uv reads requires-python (3.12) from pyproject.toml
       - run: uv sync --extra dev
       - run: uv run ruff check .
       - run: uv run pytest -m "not exasol"
-# ponytail: the Exasol Nano integration job is added once the SQL pipeline exists (CONTRACT.md §11.3 of the plan).
+      - run: uv run pip-audit
+
+  exasol:
+    runs-on: ubuntu-latest
+    needs: [unit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra dev
+
+      - name: Start Exasol Nano Container
+        run: |
+          mkdir -p "$RUNNER_TEMP/secrets"
+          echo -n "TestSysPass123!" > "$RUNNER_TEMP/secrets/sys_password"
+          docker run -d --name exasol-nano \
+            --shm-size=512mb \
+            --pids-limit=-1 \
+            -p 127.0.0.1:8563:8563 \
+            -v "$RUNNER_TEMP/secrets/sys_password:/run/secrets/sys_password:ro" \
+            docker.io/exasol/nano:2026.2.0-nano.3-amd64 \
+            init sys_password_file=/run/secrets/sys_password
+
+      - name: Wait for Exasol Nano Ready
+        run: |
+          echo "Waiting for Exasol Nano to be ready..."
+          timeout 300 bash -c 'until docker logs exasol-nano 2>&1 | grep -q "Database is now up and running!"; do sleep 3; done'
+          echo "Exasol Nano is up and running!"
+
+      - name: Initialize Talos Schemas and Run Exasol Tests
+        env:
+          EXASOL_DSN: 127.0.0.1:8563
+          EXASOL_SYS_PASSWORD_FILE: ${{ runner.temp }}/secrets/sys_password
+          EXASOL_PASSWORD: TestSysPass123!
+        run: |
+          uv run talos init
+          uv run pytest -m exasol
