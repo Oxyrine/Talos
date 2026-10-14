@@ -449,7 +449,7 @@ def decide(
                 )
             elif p_kind in ("OWNERSHIP", "INTERDEP"):
                 e_kind = "INTERDEP" if p_kind == "INTERDEP" else "CONTROL"
-                valid_from = ev_data.get("effective_from", "0001-01-01")
+                valid_from = "0001-01-01"  # a rejection spans all time, whatever the edge's effective date
                 conn.execute(
                     """
                     INSERT INTO GRAPH.OWNERSHIP_EVENT (
