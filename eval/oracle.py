@@ -62,7 +62,7 @@ def run_oracle(
 
         for b_id in batch_ids:
             try:
-                sample = batch_sample(b_id, conn=conn)
+                sample = batch_sample(b_id, business_date=business_date, conn=conn)
                 # Oracle approves all sample items
                 verdicts = {pid: True for pid in sample.sample_ids}
                 batch_decide(
@@ -71,6 +71,7 @@ def run_oracle(
                     verdicts=verdicts,
                     reason="Oracle approval: batch sample verified",
                     reviewer=ORACLE_REVIEWER,
+                    business_date=business_date,
                     conn=conn,
                 )
                 stats["batch_approved"] += 1
@@ -101,6 +102,7 @@ def run_oracle(
                     decision="APPROVE",
                     reason="Oracle approval: strong name and pincode agreement",
                     reviewer=ORACLE_REVIEWER,
+                    business_date=business_date,
                     conn=conn,
                 )
                 stats["t1_approved"] += 1
@@ -137,6 +139,7 @@ def run_oracle(
                         decision="APPROVE",
                         reason=f"Oracle approval: model recommended match (confidence {v_conf:.2f})",
                         reviewer=ORACLE_REVIEWER,
+                        business_date=business_date,
                         conn=conn,
                     )
                     stats["t2_approved"] += 1
@@ -167,6 +170,7 @@ def run_oracle(
                     decision="REJECT",
                     reason="Oracle rejection: ID conflict or name mismatch",
                     reviewer=ORACLE_REVIEWER,
+                    business_date=business_date,
                     conn=conn,
                 )
                 stats["t3_rejected"] += 1
@@ -196,6 +200,7 @@ def run_oracle(
                     decision="APPROVE",
                     reason="Oracle approval: registry control edge confirmed",
                     reviewer=ORACLE_REVIEWER,
+                    business_date=business_date,
                     conn=conn,
                 )
                 stats["ownership_approved"] += 1
@@ -227,6 +232,7 @@ def run_oracle(
                     decision="APPROVE",
                     reason="Oracle approval: customer credit interdependence confirmed",
                     reviewer=ORACLE_REVIEWER,
+                    business_date=business_date,
                     conn=conn,
                 )
                 stats["interdep_approved"] += 1
@@ -261,6 +267,7 @@ def run_oracle(
                         controller=ctrl,
                         reason=f"Oracle truth ruling: applied {rul}",
                         reviewer=ORACLE_REVIEWER,
+                        business_date=business_date,
                         conn=conn,
                     )
                     stats["jv_ruled"] += 1

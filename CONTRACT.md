@@ -666,7 +666,8 @@ def decide(
     proposal_id: str,
     decision: Literal["APPROVE", "REJECT", "DEFER"],
     reason: str,
-    reviewer: Reviewer
+    reviewer: Reviewer,
+    business_date: date | str
 ) -> DecisionResult:
     """
     Execute decision in TALOS_APPROVER transaction.
@@ -674,7 +675,7 @@ def decide(
     """
     ...
 
-def batch_sample(batch_id: str) -> BatchSample:
+def batch_sample(batch_id: str, business_date: date | str) -> BatchSample:
     """Deterministic sample using secrets.randbits(31) seed over sorted proposal IDs."""
     ...
 
@@ -683,7 +684,8 @@ def batch_decide(
     seed: int,
     verdicts: dict[str, bool],
     reason: str,
-    reviewer: Reviewer
+    reviewer: Reviewer,
+    business_date: date | str
 ) -> DecisionResult:
     """
     All True -> BATCH_APPROVE (writes LINK_EVENTs / OWNERSHIP_EVENTs).
@@ -696,7 +698,9 @@ def rule(
     ruling: Literal["SINGLE", "JOINT", "NONE", "CONNECTED"],
     controller: str | None,
     reason: str,
-    reviewer: Reviewer
+    reviewer: Reviewer,
+    business_date: date | str,
+    connected_edge_kind: Literal["CONTROL", "INTERDEP"] = "CONTROL"
 ) -> DecisionResult:
     """Resolve 50/50 Joint Venture ambiguity with atomic event generation."""
     ...

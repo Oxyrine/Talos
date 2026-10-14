@@ -1,10 +1,11 @@
 """tests/test_batch_sample.py: Test batch sample size calculations and deterministic sampling."""
 
 import random
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestrator.decide import calculate_sample_size
+from orchestrator.decide import _get_active_batch_seed, batch_sample, calculate_sample_size
 
 
 def test_sample_size_calculation_t0():
@@ -59,3 +60,30 @@ def test_sampling_determinism():
     assert sample_1 == sample_2
     assert len(sample_1) == 25
     assert set(sample_1).issubset(set(items))
+
+
+def test_batch_sample_repo_code():
+    """Verify orchestrator.decide.batch_sample produces deterministic sample matching its seed."""
+    mock_conn = MagicMock()
+    # 50 proposals in batch
+    proposals = [{"proposal_id": f"P-{i:03d}", "kind": "RECORD_LINK"} for i in range(50)]
+    mock_stmt = MagicMock()
+    mock_stmt.fetchall.return_value = proposals
+    mock_conn.execute.return_value = mock_stmt
+
+    with patch("orchestrator.decide.policy_in_force") as mock_pif:
+        mock_pif.return_value = ({"T0_SAMPLE_PCT": 10, "T0_SAMPLE_MIN": 5}, {})
+        sample = batch_sample("B-REC-100", business_date="2026-09-30", conn=mock_conn)
+
+    assert sample.batch_id == "B-REC-100"
+    assert sample.total_count == 50
+    assert sample.sample_count == 5
+    assert len(sample.sample_ids) == 5
+
+    # Determinism: Recomputing with sample.seed must yield the exact same sample_ids
+    rng = random.Random(sample.seed)
+    expected_ids = tuple(rng.sample(sorted(sample.covered_ids), 5))
+    assert sample.sample_ids == expected_ids
+
+    # Seed is tracked
+    assert _get_active_batch_seed("B-REC-100") == sample.seed

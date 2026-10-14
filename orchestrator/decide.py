@@ -6,14 +6,15 @@ import hashlib
 import json
 import random
 import secrets
+import warnings
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
 from pyexasol import ExaConnection
 
-from orchestrator.db import connect
+from orchestrator.db import REPO_ROOT, connect
 from orchestrator.policy import policy_in_force
 
 
@@ -53,6 +54,79 @@ class BatchSample:
     covered_ids: tuple[str, ...]
     total_count: int
     sample_count: int
+
+
+_ACTIVE_BATCH_SEEDS: dict[str, int] = {}
+
+
+def _record_batch_seed(batch_id: str, seed: int) -> None:
+    """Record active seed for batch in memory and .talos/batch_seeds.json."""
+    _ACTIVE_BATCH_SEEDS[batch_id] = seed
+    try:
+        seeds_dir = REPO_ROOT / ".talos"
+        seeds_dir.mkdir(parents=True, exist_ok=True)
+        seeds_file = seeds_dir / "batch_seeds.json"
+        data = {}
+        if seeds_file.is_file():
+            try:
+                data = json.loads(seeds_file.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        data[batch_id] = seed
+        seeds_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as e:
+        warnings.warn(f"Failed to persist batch seed to .talos/batch_seeds.json: {e}", stacklevel=2)
+
+
+def _get_active_batch_seed(batch_id: str) -> int | None:
+    """Retrieve the seed issued by batch_sample for a batch."""
+    if batch_id in _ACTIVE_BATCH_SEEDS:
+        return _ACTIVE_BATCH_SEEDS[batch_id]
+    seeds_file = REPO_ROOT / ".talos" / "batch_seeds.json"
+    if seeds_file.is_file():
+        try:
+            data = json.loads(seeds_file.read_text(encoding="utf-8"))
+            if batch_id in data:
+                seed = int(data[batch_id])
+                _ACTIVE_BATCH_SEEDS[batch_id] = seed
+                return seed
+        except Exception:
+            pass
+    return None
+
+
+def _clear_batch_seed(batch_id: str) -> None:
+    """Remove active seed for batch once decided."""
+    _ACTIVE_BATCH_SEEDS.pop(batch_id, None)
+    seeds_file = REPO_ROOT / ".talos" / "batch_seeds.json"
+    if seeds_file.is_file():
+        try:
+            data = json.loads(seeds_file.read_text(encoding="utf-8"))
+            if batch_id in data:
+                del data[batch_id]
+                seeds_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+
+def _extract_holder_stake(ev_data: dict[str, Any], h_key: str, proposal_id: str) -> float:
+    """Extract declared stake_pct for a holder from evidence, raising if absent."""
+    stakes = ev_data.get("stakes")
+    if isinstance(stakes, dict) and h_key in stakes:
+        return float(stakes[h_key])
+
+    holders_raw = ev_data.get("holders")
+    if isinstance(holders_raw, list):
+        for item in holders_raw:
+            if isinstance(item, dict):
+                key = item.get("holder_entity_key") or item.get("holder") or item.get("entity_key")
+                if key == h_key and "stake_pct" in item:
+                    return float(item["stake_pct"])
+
+    if "stake_pct" in ev_data:
+        return float(ev_data["stake_pct"])
+
+    raise ValueError(f"Proposal {proposal_id} evidence missing required 'stake_pct' for holder {h_key}.")
 
 
 def calculate_sample_size(batch_total: int, batch_kind: str, policy: dict[str, Any]) -> int:
@@ -100,10 +174,10 @@ def _ensure_entity_exists(
             query_params={"cin": cin},
         )
         row = name_stmt.fetchone()
-        if row:
+        if row and row.get("entity_name"):
             display_name = row["entity_name"]
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.warn(f"Failed to lookup entity name for {cin}: {e}", stacklevel=2)
 
     conn.execute(
         """
@@ -128,8 +202,8 @@ def decide(
     decision: Literal["APPROVE", "REJECT", "DEFER"],
     reason: str,
     reviewer: Reviewer,
+    business_date: str | date,
     conn: ExaConnection | None = None,
-    business_date: str = "2026-09-30",
 ) -> DecisionResult:
     """Execute decision in TALOS_APPROVER transaction.
 
@@ -140,6 +214,8 @@ def decide(
 
     if not (1 <= len(reason) <= 2000):
         raise ValueError("Decision reason must be between 1 and 2000 characters.")
+
+    bd_str = business_date.isoformat() if isinstance(business_date, date) else str(business_date)
 
     close_conn = False
     if conn is None:
@@ -173,11 +249,13 @@ def decide(
         p_ev_hash = prop["evidence_hash"]
 
         # Parse evidence details
-        ev_data = {}
-        try:
-            ev_data = json.loads(p_ev_json) if p_ev_json else {}
-        except Exception:
-            pass
+        if p_ev_json:
+            try:
+                ev_data = json.loads(p_ev_json)
+            except Exception as e:
+                raise ValueError(f"Proposal {proposal_id} evidence_json is invalid JSON: {e}") from e
+        else:
+            ev_data = {}
 
         # 2. Check for existing terminal decision
         term_stmt = conn.execute(
@@ -306,8 +384,17 @@ def decide(
                 e_kind = "INTERDEP" if p_kind == "INTERDEP" else "CONTROL"
                 c_type = "MAJORITY" if e_kind == "CONTROL" else None
                 # Read true stake_pct and effective_from from proposal evidence
-                stake_pct = Decimal(str(ev_data.get("stake_pct", 100.0)))
-                valid_from = ev_data.get("effective_from", "0001-01-01")
+                valid_from = ev_data.get("effective_from")
+                if not valid_from or str(valid_from).strip() == "":
+                    raise ValueError(f"Proposal {proposal_id} evidence missing required 'effective_from'.")
+
+                if p_kind == "OWNERSHIP":
+                    stake_raw = ev_data.get("stake_pct") if "stake_pct" in ev_data else ev_data.get("share_pct")
+                    if stake_raw is None:
+                        raise ValueError(f"Proposal {proposal_id} evidence missing required 'stake_pct'.")
+                    stake_pct = Decimal(str(stake_raw))
+                else:
+                    stake_pct = Decimal(str(ev_data.get("stake_pct", 0.0)))
 
                 conn.execute(
                     """
@@ -362,6 +449,7 @@ def decide(
                 )
             elif p_kind in ("OWNERSHIP", "INTERDEP"):
                 e_kind = "INTERDEP" if p_kind == "INTERDEP" else "CONTROL"
+                valid_from = ev_data.get("effective_from", "0001-01-01")
                 conn.execute(
                     """
                     INSERT INTO GRAPH.OWNERSHIP_EVENT (
@@ -371,7 +459,7 @@ def decide(
                     ) VALUES (
                         {event_id}, {edge_key}, {holder_entity_key}, {held_entity_key},
                         {edge_kind}, NULL, 'REJECTED', 0.0, 'RETRACT',
-                        {evidence_hash}, '0001-01-01', '9999-12-31', {recorded_at}, {decision_id}, {proposal_id}
+                        {evidence_hash}, {valid_from}, '9999-12-31', {recorded_at}, {decision_id}, {proposal_id}
                     )
                     """,
                     query_params={
@@ -381,6 +469,7 @@ def decide(
                         "held_entity_key": p_held,
                         "edge_kind": e_kind,
                         "evidence_hash": p_ev_hash,
+                        "valid_from": valid_from,
                         "recorded_at": decided_at_str,
                         "decision_id": dec_id,
                         "proposal_id": proposal_id,
@@ -393,10 +482,9 @@ def decide(
         published_run_id = None
         try:
             from orchestrator.pipeline import publish_run
-            pub_res = publish_run(business_date=business_date)
+            pub_res = publish_run(business_date=bd_str)
             published_run_id = pub_res.run_id
         except Exception as e:
-            import warnings
             warnings.warn(f"publish_run after decision failed: {e}", stacklevel=2)
 
         return DecisionResult(
@@ -415,7 +503,11 @@ def decide(
             conn.close()
 
 
-def batch_sample(batch_id: str, conn: ExaConnection | None = None) -> BatchSample:
+def batch_sample(
+    batch_id: str,
+    business_date: str | date,
+    conn: ExaConnection | None = None,
+) -> BatchSample:
     """Generate deterministic sample for a batch using secrets.randbits(31).
 
     Must connect as approver (not reader), as reader cannot SELECT on GOV schema.
@@ -453,9 +545,11 @@ def batch_sample(batch_id: str, conn: ExaConnection | None = None) -> BatchSampl
         )
 
         n = len(proposal_ids)
-        policy_vals, _ = policy_in_force(conn, "2026-09-30", datetime.now(UTC))
+        bd_str = business_date.isoformat() if isinstance(business_date, date) else str(business_date)
+        policy_vals, _ = policy_in_force(conn, bd_str, datetime.now(UTC))
         k = calculate_sample_size(n, batch_kind, policy_vals)
         seed = secrets.randbits(31)
+        _record_batch_seed(batch_id, seed)
         rng = random.Random(seed)
         sample_ids = tuple(rng.sample(sorted(proposal_ids), k))
 
@@ -479,8 +573,8 @@ def batch_decide(
     verdicts: dict[str, bool],
     reason: str,
     reviewer: Reviewer,
+    business_date: str | date,
     conn: ExaConnection | None = None,
-    business_date: str = "2026-09-30",
 ) -> DecisionResult:
     """Process batch review with strict sample verification.
 
@@ -493,6 +587,14 @@ def batch_decide(
 
     if not (1 <= len(reason) <= 2000):
         raise ValueError("Decision reason must be between 1 and 2000 characters.")
+
+    active_seed = _get_active_batch_seed(batch_id)
+    if active_seed is not None and seed != active_seed:
+        raise ValueError(
+            f"Provided seed {seed} does not match active sample seed {active_seed} issued for batch {batch_id}."
+        )
+
+    bd_str = business_date.isoformat() if isinstance(business_date, date) else str(business_date)
 
     close_conn = False
     if conn is None:
@@ -528,7 +630,7 @@ def batch_decide(
 
         # Recompute expected sample from seed
         now_dt = datetime.now(UTC)
-        policy_vals, _ = policy_in_force(conn, business_date, now_dt)
+        policy_vals, _ = policy_in_force(conn, bd_str, now_dt)
         sample_k = calculate_sample_size(len(covered_props), batch_kind, policy_vals)
 
         rng = random.Random(seed)
@@ -571,25 +673,18 @@ def batch_decide(
                 },
             )
 
-            # Set-based insert into GOV.DECISION_COVERS
+            # Single atomic insert into GOV.DECISION_COVERS with computed in_sample (no UPDATE)
+            sample_ids_sql = ", ".join(f"'{pid}'" for pid in sorted(expected_sample_ids))
             conn.execute(
-                """
+                f"""
                 INSERT INTO GOV.DECISION_COVERS (decision_id, proposal_id, in_sample)
-                SELECT {decision_id}, p.proposal_id, FALSE
+                SELECT {{decision_id}}, p.proposal_id,
+                       CASE WHEN p.proposal_id IN ({sample_ids_sql}) THEN TRUE ELSE FALSE END
                 FROM GOV.PROPOSAL p
-                WHERE p.batch_id = {batch_id}
+                WHERE p.batch_id = {{batch_id}}
                 """,
                 query_params={"decision_id": dec_id, "batch_id": batch_id},
             )
-            # Mark in_sample = TRUE for sampled IDs
-            for pid in expected_sample_ids:
-                conn.execute(
-                    """
-                    UPDATE GOV.DECISION_COVERS SET in_sample = TRUE
-                    WHERE decision_id = {decision_id} AND proposal_id = {proposal_id}
-                    """,
-                    query_params={"decision_id": dec_id, "proposal_id": pid},
-                )
 
             # Set-based insert into GRAPH events
             if batch_kind == "RECORD_LINK":
@@ -650,16 +745,24 @@ def batch_decide(
                     p_ev_hash = pdata["evidence_hash"]
                     p_ev_json = pdata["evidence_json"]
 
-                    ev_dict = {}
+                    if not p_ev_json:
+                        raise ValueError(f"Proposal {pid} evidence_json is missing.")
                     try:
-                        ev_dict = json.loads(p_ev_json) if p_ev_json else {}
-                    except Exception:
-                        pass
-                    stake = float(ev_dict.get("stake_pct", 100.0))
-                    v_from = ev_dict.get("effective_from", "0001-01-01")
+                        ev_dict = json.loads(p_ev_json)
+                    except Exception as e:
+                        raise ValueError(f"Proposal {pid} evidence_json is invalid JSON: {e}") from e
 
-                    if not p_holder or not p_held:
-                        raise ValueError(f"Proposal {pid} missing endpoints.")
+                    if not p_holder or not p_held or p_holder.strip() == "" or p_held.strip() == "":
+                        raise ValueError(f"Proposal {pid} missing required endpoints: holder={p_holder}, held={p_held}.")
+
+                    v_from = ev_dict.get("effective_from")
+                    if not v_from or str(v_from).strip() == "":
+                        raise ValueError(f"Proposal {pid} evidence missing required 'effective_from'.")
+
+                    stake_raw = ev_dict.get("stake_pct") if "stake_pct" in ev_dict else ev_dict.get("share_pct")
+                    if stake_raw is None:
+                        raise ValueError(f"Proposal {pid} evidence missing required 'stake_pct'.")
+                    stake = float(stake_raw)
 
                     conn.execute(
                         """
@@ -758,14 +861,14 @@ def batch_decide(
             covered_ids = tuple(failed_pids)
 
         conn.commit()
+        _clear_batch_seed(batch_id)
 
         published_run_id = None
         try:
             from orchestrator.pipeline import publish_run
-            pub_res = publish_run(business_date=business_date)
+            pub_res = publish_run(business_date=bd_str)
             published_run_id = pub_res.run_id
         except Exception as e:
-            import warnings
             warnings.warn(f"publish_run after batch decision failed: {e}", stacklevel=2)
 
         return DecisionResult(
@@ -790,9 +893,9 @@ def rule(
     controller: str | None,
     reason: str,
     reviewer: Reviewer,
+    business_date: str | date,
     connected_edge_kind: Literal["CONTROL", "INTERDEP"] = "CONTROL",
     conn: ExaConnection | None = None,
-    business_date: str = "2026-09-30",
 ) -> DecisionResult:
     """Resolve Joint Venture control ambiguity with strict validation and atomic event generation."""
     if reviewer.role != "APPROVER":
@@ -806,6 +909,8 @@ def rule(
 
     if ruling == "CONNECTED" and len(reason) < 20:
         raise ValueError("CONNECTED ruling requires at least 20 characters of evidence text.")
+
+    bd_str = business_date.isoformat() if isinstance(business_date, date) else str(business_date)
 
     close_conn = False
     if conn is None:
@@ -847,16 +952,20 @@ def rule(
         ev_hash = prop["evidence_hash"]
         ev_json_str = prop["evidence_json"]
 
-        holders: list[str] = []
-        ev_data = {}
+        if not ev_json_str:
+            raise ValueError(f"Proposal {proposal_id} evidence_json is missing.")
         try:
-            ev_data = json.loads(ev_json_str) if ev_json_str else {}
-            holders = ev_data.get("holders", [])
-        except Exception:
-            pass
+            ev_data = json.loads(ev_json_str)
+        except Exception as e:
+            raise ValueError(f"Proposal {proposal_id} evidence_json is invalid JSON: {e}") from e
 
+        holders = ev_data.get("holders", [])
         if not holders:
             raise ValueError(f"Proposal {proposal_id} has no holders declared in evidence.")
+
+        valid_from = ev_data.get("effective_from")
+        if not valid_from or str(valid_from).strip() == "":
+            raise ValueError(f"Proposal {proposal_id} evidence missing required 'effective_from'.")
 
         if ruling == "SINGLE" and controller not in holders:
             raise ValueError(f"Controller {controller} is not one of the declared holders {holders}.")
@@ -898,7 +1007,6 @@ def rule(
 
         # 2. Write GRAPH.RULING_EVENT
         ruling_ev_id = f"EV-{time_tag}-00"
-        valid_from = ev_data.get("effective_from", "0001-01-01")
 
         conn.execute(
             """
@@ -927,16 +1035,17 @@ def rule(
         for idx, h_key in enumerate(holders, start=1):
             edge_ev_id = f"EV-{time_tag}-{idx:02d}"
             edge_key = f"CONTROL:{h_key}>{held_key}"
+            stake = _extract_holder_stake(ev_data, h_key, proposal_id)
 
             if ruling == "SINGLE":
                 if h_key == controller:
-                    c_type, status, stake = "MAJORITY", "CONFIRMED", 100.0
+                    c_type, status = "MAJORITY", "CONFIRMED"
                 else:
-                    c_type, status, stake = "MINORITY", "CONFIRMED", 0.0
+                    c_type, status = "MINORITY", "CONFIRMED"
             elif ruling in ("JOINT", "CONNECTED"):
-                c_type, status, stake = "JOINT", "CONFIRMED", 50.0
+                c_type, status = "JOINT", "CONFIRMED"
             else:  # NONE
-                c_type, status, stake = "UNKNOWN", "REJECTED", 0.0
+                c_type, status = "UNKNOWN", "REJECTED"
 
             conn.execute(
                 """
@@ -1008,10 +1117,9 @@ def rule(
         published_run_id = None
         try:
             from orchestrator.pipeline import publish_run
-            pub_res = publish_run(business_date=business_date)
+            pub_res = publish_run(business_date=bd_str)
             published_run_id = pub_res.run_id
         except Exception as e:
-            import warnings
             warnings.warn(f"publish_run after ruling failed: {e}", stacklevel=2)
 
         return DecisionResult(
