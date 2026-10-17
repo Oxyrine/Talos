@@ -6,7 +6,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -84,6 +84,13 @@ def _record_timing(
             "started_at": started_str,
         },
     )
+
+
+def _filed_at_after(known_str: str) -> str:
+    """Wall-clock filing time, kept at least one second after known_at."""
+    known_dt = datetime.strptime(known_str[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+    filed_dt = max(datetime.now(UTC).replace(microsecond=0), known_dt + timedelta(seconds=1))
+    return filed_dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def publish_run(
@@ -351,6 +358,9 @@ def match(
         )
 
         stage_params["baseline_run"] = baseline_run.run_id
+        # Proposals are filed after the baseline run, so they must not be visible at its known_at;
+        # stamping them with known_at would leak them into a replay of that run.
+        stage_params["filed_at"] = _filed_at_after(known_str)
 
         # 7. 70_propose_record_links.sql
         _execute_stage("70_propose_record_links", ["70_propose_record_links.sql"], **stage_params)

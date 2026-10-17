@@ -121,7 +121,7 @@ SELECT n.proposal_id, 'OWNERSHIP', n.subject_key, CAST(NULL AS VARCHAR(16)), CAS
        CASE WHEN gh.group_key IS NULL OR gd.group_key IS NULL OR gh.group_key = gd.group_key THEN 0
             ELSE COALESCE(gx.amt, 0) END,
        CASE WHEN n.corroborated = 1 THEN b.batch_id END,
-       {known_at}, {baseline_run}, 'talos-sql-1'
+       {filed_at}, {baseline_run}, 'talos-sql-1'
 FROM newp n
 CROSS JOIN batch b
 LEFT JOIN grp gh ON gh.entity_key = 'E:' || n.holder_cin
@@ -189,7 +189,7 @@ SELECT p.proposal_id, 'CONTROL_RULING', p.subject_key, CAST(NULL AS VARCHAR(16))
        'T3', 'AMBIGUOUS_CONTROL',
        'Ambiguous control: ' || CAST(p.n_holders AS VARCHAR(4)) || ' holders claim control; rule before any edge is admitted',
        p.evidence_json, p.evidence_hash, COALESCE(gx.amt, 0), CAST(NULL AS VARCHAR(16)),
-       {known_at}, {baseline_run}, 'talos-sql-1'
+       {filed_at}, {baseline_run}, 'talos-sql-1'
 FROM p
 LEFT JOIN grp g ON g.entity_key = 'E:' || p.held_cin
 LEFT JOIN gexp gx ON gx.group_key = g.group_key
@@ -276,7 +276,7 @@ SELECT p.proposal_id, 'INTERDEP', p.subject_key, CAST(NULL AS VARCHAR(16)), CAST
        p.evidence_json, p.evidence_hash,
        CASE WHEN gh.group_key IS NULL OR gd.group_key IS NULL OR gh.group_key = gd.group_key THEN 0
             ELSE COALESCE(gx.amt, 0) END,
-       CAST(NULL AS VARCHAR(16)), {known_at}, {baseline_run}, 'talos-sql-1'
+       CAST(NULL AS VARCHAR(16)), {filed_at}, {baseline_run}, 'talos-sql-1'
 FROM p
 LEFT JOIN grp gh ON gh.entity_key = p.holder_key
 LEFT JOIN grp gd ON gd.entity_key = p.held_key

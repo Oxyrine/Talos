@@ -103,7 +103,7 @@ SELECT n.proposal_id, 'RECORD_LINK', n.subject_key, n.pair_key, n.rec_a, n.entit
        END,
        n.evidence_json, n.evidence_hash, COALESCE(i.amt, 0),
        CASE WHEN n.tier = 'T0' THEN b.batch_id END,
-       {known_at}, {baseline_run}, 'talos-sql-1'
+       {filed_at}, {baseline_run}, 'talos-sql-1'
 FROM newp n
 CROSS JOIN batch b
 LEFT JOIN imp i ON i.rec_key = n.rec_a;
