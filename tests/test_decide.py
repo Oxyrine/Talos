@@ -58,7 +58,7 @@ class MockConnection:
             return MockStmt(rows=[])
 
         # 4. Check active ASSERT
-        if "SELECT entity_key FROM ( SELECT entity_key, action" in normalized:
+        if "SELECT entity_key FROM ( SELECT entity_key, \"ACTION\"" in normalized:
             return MockStmt(rows=[])
 
         return MockStmt(rows=[])

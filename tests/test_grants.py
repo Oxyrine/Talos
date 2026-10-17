@@ -62,7 +62,7 @@ def test_pipeline_privilege_denials():
             lambda: conn.execute(
                 """
                 INSERT INTO GRAPH.LINK_EVENT (
-                    event_id, link_key, rec_key, entity_key, action, valid_from, valid_to, recorded_at, decision_id
+                    event_id, link_key, rec_key, entity_key, "ACTION", valid_from, valid_to, recorded_at, decision_id
                 ) VALUES ('E-TEST', 'K1', 'R1', 'E1', 'ASSERT', '2026-01-01', '9999-12-31', CURRENT_TIMESTAMP, 'D1')
                 """
             ),
@@ -71,7 +71,7 @@ def test_pipeline_privilege_denials():
 
         # Negative control 3: UPDATE on GRAPH
         _assert_privilege_denied(
-            lambda: conn.execute("UPDATE GRAPH.LINK_EVENT SET action = 'RETRACT'"),
+            lambda: conn.execute("""UPDATE GRAPH.LINK_EVENT SET "ACTION" = 'RETRACT'"""),
             "GRAPH.LINK_EVENT",
         )
 
@@ -102,7 +102,7 @@ def test_approver_privilege_denials():
 
         # Negative control 1: UPDATE on GRAPH
         _assert_privilege_denied(
-            lambda: conn.execute("UPDATE GRAPH.LINK_EVENT SET action = 'RETRACT'"),
+            lambda: conn.execute("""UPDATE GRAPH.LINK_EVENT SET "ACTION" = 'RETRACT'"""),
             "GRAPH.LINK_EVENT",
         )
 
@@ -157,11 +157,12 @@ def test_no_update_on_raw():
     if not _assert_tables_exist(required):
         pytest.skip(f"Required tables {required} not initialized in database")
 
-    for role in ("loader", "pipeline", "approver", "reader"):
+    for role in ("loader", "pipeline", "approver", "reader", "eval"):
         conn = connect(role, autocommit=True)
         try:
-            # Positive control: role can at least read RAW table
-            conn.execute("SELECT COUNT(*) FROM RAW_LOS.CUSTOMER")
+            # Positive control where the role may read RAW_LOS (approver and reader may not)
+            if role in ("loader", "pipeline", "eval"):
+                conn.execute("SELECT COUNT(*) FROM RAW_LOS.CUSTOMER")
 
             # Negative control: UPDATE is denied
             _assert_privilege_denied(

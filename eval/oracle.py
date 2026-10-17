@@ -73,6 +73,7 @@ def run_oracle(
                     reviewer=ORACLE_REVIEWER,
                     business_date=business_date,
                     conn=conn,
+                    publish=False,
                 )
                 stats["batch_approved"] += 1
             except Exception:
@@ -104,6 +105,7 @@ def run_oracle(
                     reviewer=ORACLE_REVIEWER,
                     business_date=business_date,
                     conn=conn,
+                    publish=False,
                 )
                 stats["t1_approved"] += 1
             except (BatchProtectedError, ProposalConflictError, ValueError):
@@ -141,6 +143,7 @@ def run_oracle(
                         reviewer=ORACLE_REVIEWER,
                         business_date=business_date,
                         conn=conn,
+                        publish=False,
                     )
                     stats["t2_approved"] += 1
                 except (BatchProtectedError, ProposalConflictError, ValueError):
@@ -172,6 +175,7 @@ def run_oracle(
                     reviewer=ORACLE_REVIEWER,
                     business_date=business_date,
                     conn=conn,
+                    publish=False,
                 )
                 stats["t3_rejected"] += 1
             except (BatchProtectedError, ProposalConflictError, ValueError):
@@ -202,6 +206,7 @@ def run_oracle(
                     reviewer=ORACLE_REVIEWER,
                     business_date=business_date,
                     conn=conn,
+                    publish=False,
                 )
                 stats["ownership_approved"] += 1
             except (BatchProtectedError, ProposalConflictError, ValueError):
@@ -234,6 +239,7 @@ def run_oracle(
                     reviewer=ORACLE_REVIEWER,
                     business_date=business_date,
                     conn=conn,
+                    publish=False,
                 )
                 stats["interdep_approved"] += 1
             except (BatchProtectedError, ProposalConflictError, ValueError):
@@ -269,6 +275,7 @@ def run_oracle(
                         reviewer=ORACLE_REVIEWER,
                         business_date=business_date,
                         conn=conn,
+                        publish=False,
                     )
                     stats["jv_ruled"] += 1
                 except Exception:
