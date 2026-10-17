@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,43 @@ def _iter_parquet_tuples(file_path: Path) -> Iterable[tuple[Any, ...]]:
         num_rows = len(batch)
         for i in range(num_rows):
             yield tuple(col[i] for col in cols)
+
+
+def _sql_literal(value: Any) -> str:
+    """Render one Python value as an Exasol SQL literal."""
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float, Decimal)):
+        return str(value)
+    if isinstance(value, datetime):
+        return "'" + value.strftime("%Y-%m-%d %H:%M:%S.%f") + "'"
+    if isinstance(value, date):
+        return "'" + value.isoformat() + "'"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def insert_rows(conn: ExaConnection, table_name: str, columns: list[str], rows: Iterable[tuple], chunk: int = 2000) -> int:
+    """Append rows with chunked multi-row INSERT ... VALUES.
+
+    pyexasol's import_from_iterable opens an HTTP tunnel that hangs against Exasol Nano in
+    Docker Desktop on Windows (docs/PROBE.md, probe 10), so the loader uses plain SQL.
+    No query_params are passed, so pyexasol does not reformat the literals.
+    """
+    head = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES "
+    batch: list[str] = []
+    total = 0
+    for row in rows:
+        batch.append("(" + ", ".join(_sql_literal(v) for v in row) + ")")
+        if len(batch) >= chunk:
+            conn.execute(head + ", ".join(batch))
+            total += len(batch)
+            batch = []
+    if batch:
+        conn.execute(head + ", ".join(batch))
+        total += len(batch)
+    return total
 
 
 def resolve_target_table(file_path: Path) -> str | None:
@@ -329,20 +368,28 @@ def load(
             parquet_file = pq.ParquetFile(file_path)
             schema_names = parquet_file.schema.names
 
-            # Idempotency: avoid doubling rows on re-load
+            # Idempotency without deleting evidence: raw tables are append-only (no role holds
+            # DELETE on RAW_*), so a load_id that is already present is skipped, not replaced.
+            # Tables without a load_id (TRUTH, STAGE.PINCODE_DISTRICT) are replaced whole.
             if "load_id" in schema_names:
                 table_pydict = pq.read_table(file_path, columns=["load_id"]).to_pydict()
-                file_load_ids = set(table_pydict.get("load_id", []))
-                for lid in file_load_ids:
-                    conn.execute(
-                        f"DELETE FROM {table_name} WHERE load_id = {{lid}}",
-                        query_params={"lid": lid},
-                    )
+                file_load_ids = sorted(set(table_pydict.get("load_id", [])))
+                present = {
+                    r["load_id"]
+                    for r in conn.execute(f"SELECT DISTINCT load_id FROM {table_name}").fetchall()
+                }
+                if present.intersection(file_load_ids):
+                    if not present.issuperset(file_load_ids):
+                        raise ValueError(
+                            f"{file_path.name}: loads {sorted(present.intersection(file_load_ids))} are already in "
+                            f"{table_name} but others are not; refusing a partial re-load (run talos reset)."
+                        )
+                    results[table_name] = int(conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchval() or 0)
+                    continue
             else:
                 conn.execute(f"TRUNCATE TABLE {table_name}")
 
-            row_iter = _iter_parquet_tuples(file_path)
-            conn.import_from_iterable(row_iter, table_name)
+            insert_rows(conn, table_name, list(schema_names), _iter_parquet_tuples(file_path))
 
             # Count rows
             stmt = conn.execute(f"SELECT COUNT(*) FROM {table_name}")

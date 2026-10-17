@@ -18,6 +18,8 @@ def _update_readme_metrics(profile: str, metrics: dict[str, Any]) -> None:
     Preserves 4-column structure: | Metric | Dev | Test (unseen) | Target |
     If a metric is None, writes 'not measured'.
     """
+    if profile not in ("dev", "test"):
+        return   # only the dev and held-out test benchmarks are published (CI runs tiny)
     readme_path = REPO_ROOT / "README.md"
     if not readme_path.is_file():
         return
@@ -209,12 +211,12 @@ def compute_metrics(
                     COUNT(le.rec_key) as total_asserted,
                     (SELECT COUNT(*) FROM TRUTH.GT_RECORD_ENTITY) as total_true
                 FROM (
-                    SELECT rec_key, entity_key, action,
+                    SELECT rec_key, entity_key, "ACTION",
                            ROW_NUMBER() OVER (PARTITION BY link_key ORDER BY recorded_at DESC, event_id DESC) as rn
                     FROM GRAPH.LINK_EVENT
                 ) le
                 LEFT JOIN TRUTH.GT_RECORD_ENTITY gt ON le.rec_key = gt.rec_key
-                WHERE le.rn = 1 AND le.action = 'ASSERT'
+                WHERE le.rn = 1 AND le."ACTION" = 'ASSERT'
                 """
             )
             er_row = er_stmt.fetchone()
@@ -249,16 +251,25 @@ def compute_metrics(
         except Exception:
             metrics["id_name_conflicts_caught"] = None
 
-        # Metric 10: Decoy false-merges
+        # Metric 10: Decoy false-merges: a decoy L counts when any record of L is asserted
+        # to another entity, or any record of another entity is asserted to L.
         try:
             decoy_stmt = conn.execute(
                 """
-                SELECT COUNT(DISTINCT gt.entity_key)
-                FROM TRUTH.GT_ENTITY gt
-                JOIN GRAPH.LINK_EVENT le ON ('E:' || SUBSTR(le.rec_key, 5)) = gt.entity_key
-                WHERE gt.role = 'DECOY'
-                  AND le.action = 'ASSERT'
-                  AND le.entity_key <> gt.entity_key
+                WITH cur AS (
+                    SELECT rec_key, entity_key, "ACTION"
+                    FROM GRAPH.LINK_EVENT
+                    QUALIFY ROW_NUMBER() OVER (PARTITION BY link_key ORDER BY recorded_at DESC, event_id DESC) = 1
+                ),
+                wrong AS (
+                    SELECT gt.entity_key AS true_key, cur.entity_key AS linked_key
+                    FROM cur JOIN TRUTH.GT_RECORD_ENTITY gt ON gt.rec_key = cur.rec_key
+                    WHERE cur."ACTION" = 'ASSERT' AND cur.entity_key <> gt.entity_key
+                )
+                SELECT COUNT(DISTINCT d.entity_key)
+                FROM TRUTH.GT_ENTITY d
+                JOIN wrong w ON w.true_key = d.entity_key OR w.linked_key = d.entity_key
+                WHERE d.role = 'DECOY'
                 """
             )
             val = decoy_stmt.fetchval()
@@ -278,7 +289,7 @@ def compute_metrics(
                 JOIN GRAPH.OWNERSHIP_EVENT oe ON gp.subject_key = oe.edge_key
                 WHERE gp.kind = 'REGISTRY_ONLY_PARENT'
                   AND oe.status = 'CONFIRMED'
-                  AND oe.action = 'ASSERT'
+                  AND oe."ACTION" = 'ASSERT'
                 """
             )
             val = gl_stmt.fetchval()
@@ -291,7 +302,7 @@ def compute_metrics(
 
         # Metric 13: Replay fidelity
         try:
-            rep_res = replay(run_id, conn=conn)
+            rep_res = replay(run_id)   # replays write a run, so they connect as TALOS_PIPELINE
             metrics["replay_fidelity"] = 1.0 if rep_res.matches else 0.0
         except Exception:
             metrics["replay_fidelity"] = None

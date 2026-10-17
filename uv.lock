@@ -768,7 +768,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.4" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7.0" },
     { name = "pyarrow", specifier = ">=17.0.0" },
-    { name = "pyexasol", specifier = ">=2.4.0" },
+    { name = "pyexasol", specifier = ">=2.4.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },

@@ -204,6 +204,7 @@ def decide(
     reviewer: Reviewer,
     business_date: str | date,
     conn: ExaConnection | None = None,
+    publish: bool = True,
 ) -> DecisionResult:
     """Execute decision in TALOS_APPROVER transaction.
 
@@ -295,11 +296,11 @@ def decide(
             act_stmt = conn.execute(
                 """
                 SELECT entity_key FROM (
-                    SELECT entity_key, action,
+                    SELECT entity_key, "ACTION",
                            ROW_NUMBER() OVER (PARTITION BY link_key ORDER BY recorded_at DESC, event_id DESC) as rn
                     FROM GRAPH.LINK_EVENT
                     WHERE rec_key = {rec_key}
-                ) WHERE rn = 1 AND action = 'ASSERT'
+                ) WHERE rn = 1 AND "ACTION" = 'ASSERT'
                 """,
                 query_params={"rec_key": p_rec},
             )
@@ -360,7 +361,7 @@ def decide(
                 conn.execute(
                     """
                     INSERT INTO GRAPH.LINK_EVENT (
-                        event_id, link_key, rec_key, entity_key, action,
+                        event_id, link_key, rec_key, entity_key, "ACTION",
                         evidence_hash, valid_from, valid_to, recorded_at, decision_id, proposal_id
                     ) VALUES (
                         {event_id}, {link_key}, {rec_key}, {entity_key}, 'ASSERT',
@@ -400,7 +401,7 @@ def decide(
                     """
                     INSERT INTO GRAPH.OWNERSHIP_EVENT (
                         event_id, edge_key, holder_entity_key, held_entity_key,
-                        edge_kind, control_type, status, stake_pct, action,
+                        edge_kind, control_type, status, stake_pct, "ACTION",
                         evidence_hash, valid_from, valid_to, recorded_at, decision_id, proposal_id
                     ) VALUES (
                         {event_id}, {edge_key}, {holder_entity_key}, {held_entity_key},
@@ -429,7 +430,7 @@ def decide(
                 conn.execute(
                     """
                     INSERT INTO GRAPH.LINK_EVENT (
-                        event_id, link_key, rec_key, entity_key, action,
+                        event_id, link_key, rec_key, entity_key, "ACTION",
                         evidence_hash, valid_from, valid_to, recorded_at, decision_id, proposal_id
                     ) VALUES (
                         {event_id}, {link_key}, {rec_key}, {entity_key}, 'DNL',
@@ -454,7 +455,7 @@ def decide(
                     """
                     INSERT INTO GRAPH.OWNERSHIP_EVENT (
                         event_id, edge_key, holder_entity_key, held_entity_key,
-                        edge_kind, control_type, status, stake_pct, action,
+                        edge_kind, control_type, status, stake_pct, "ACTION",
                         evidence_hash, valid_from, valid_to, recorded_at, decision_id, proposal_id
                     ) VALUES (
                         {event_id}, {edge_key}, {holder_entity_key}, {held_entity_key},
@@ -480,12 +481,13 @@ def decide(
 
         # 7. Post-commit trigger publish_run
         published_run_id = None
-        try:
-            from orchestrator.pipeline import publish_run
-            pub_res = publish_run(business_date=bd_str)
-            published_run_id = pub_res.run_id
-        except Exception as e:
-            warnings.warn(f"publish_run after decision failed: {e}", stacklevel=2)
+        if publish:  # the eval oracle publishes once after all its decisions
+            try:
+                from orchestrator.pipeline import publish_run
+                pub_res = publish_run(business_date=bd_str)
+                published_run_id = pub_res.run_id
+            except Exception as e:
+                warnings.warn(f"publish_run after decision failed: {e}", stacklevel=2)
 
         return DecisionResult(
             decision_id=dec_id,
@@ -575,6 +577,7 @@ def batch_decide(
     reviewer: Reviewer,
     business_date: str | date,
     conn: ExaConnection | None = None,
+    publish: bool = True,
 ) -> DecisionResult:
     """Process batch review with strict sample verification.
 
@@ -691,7 +694,7 @@ def batch_decide(
                 conn.execute(
                     """
                     INSERT INTO GRAPH.LINK_EVENT (
-                        event_id, link_key, rec_key, entity_key, action,
+                        event_id, link_key, rec_key, entity_key, "ACTION",
                         evidence_hash, valid_from, valid_to, recorded_at, decision_id, proposal_id
                     )
                     SELECT
@@ -768,7 +771,7 @@ def batch_decide(
                         """
                         INSERT INTO GRAPH.OWNERSHIP_EVENT (
                             event_id, edge_key, holder_entity_key, held_entity_key,
-                            edge_kind, control_type, status, stake_pct, action,
+                            edge_kind, control_type, status, stake_pct, "ACTION",
                             evidence_hash, valid_from, valid_to, recorded_at, decision_id, proposal_id
                         ) VALUES (
                             {event_id}, {edge_key}, {holder_entity_key}, {held_entity_key},
@@ -838,7 +841,7 @@ def batch_decide(
                     conn.execute(
                         """
                         INSERT INTO GRAPH.LINK_EVENT (
-                            event_id, link_key, rec_key, entity_key, action,
+                            event_id, link_key, rec_key, entity_key, "ACTION",
                             evidence_hash, valid_from, valid_to, recorded_at, decision_id, proposal_id
                         ) VALUES (
                             {event_id}, {link_key}, {rec_key}, {entity_key}, 'DNL',
@@ -864,12 +867,13 @@ def batch_decide(
         _clear_batch_seed(batch_id)
 
         published_run_id = None
-        try:
-            from orchestrator.pipeline import publish_run
-            pub_res = publish_run(business_date=bd_str)
-            published_run_id = pub_res.run_id
-        except Exception as e:
-            warnings.warn(f"publish_run after batch decision failed: {e}", stacklevel=2)
+        if publish:  # the eval oracle publishes once after all its decisions
+            try:
+                from orchestrator.pipeline import publish_run
+                pub_res = publish_run(business_date=bd_str)
+                published_run_id = pub_res.run_id
+            except Exception as e:
+                warnings.warn(f"publish_run after batch decision failed: {e}", stacklevel=2)
 
         return DecisionResult(
             decision_id=dec_id,
@@ -896,6 +900,7 @@ def rule(
     business_date: str | date,
     connected_edge_kind: Literal["CONTROL", "INTERDEP"] = "CONTROL",
     conn: ExaConnection | None = None,
+    publish: bool = True,
 ) -> DecisionResult:
     """Resolve Joint Venture control ambiguity with strict validation and atomic event generation."""
     if reviewer.role != "APPROVER":
@@ -1051,7 +1056,7 @@ def rule(
                 """
                 INSERT INTO GRAPH.OWNERSHIP_EVENT (
                     event_id, edge_key, holder_entity_key, held_entity_key,
-                    edge_kind, control_type, status, stake_pct, action,
+                    edge_kind, control_type, status, stake_pct, "ACTION",
                     evidence_hash, valid_from, valid_to, recorded_at, decision_id, proposal_id
                 ) VALUES (
                     {event_id}, {edge_key}, {holder_entity_key}, {held_entity_key},
@@ -1115,12 +1120,13 @@ def rule(
         conn.commit()
 
         published_run_id = None
-        try:
-            from orchestrator.pipeline import publish_run
-            pub_res = publish_run(business_date=bd_str)
-            published_run_id = pub_res.run_id
-        except Exception as e:
-            warnings.warn(f"publish_run after ruling failed: {e}", stacklevel=2)
+        if publish:  # the eval oracle publishes once after all its decisions
+            try:
+                from orchestrator.pipeline import publish_run
+                pub_res = publish_run(business_date=bd_str)
+                published_run_id = pub_res.run_id
+            except Exception as e:
+                warnings.warn(f"publish_run after ruling failed: {e}", stacklevel=2)
 
         return DecisionResult(
             decision_id=dec_id,

@@ -169,6 +169,7 @@ def connect(
             websocket_sslopt=sslopt,
             autocommit=autocommit,
             fetch_dict=True,
+            lower_ident=True,
         )
         return conn
     except Exception as e:

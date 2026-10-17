@@ -269,7 +269,7 @@ CREATE TABLE GRAPH.LINK_EVENT (
   link_key VARCHAR(100) NOT NULL,    -- rec_key||'>'||entity_key
   rec_key VARCHAR(40) NOT NULL,
   entity_key VARCHAR(48) NOT NULL,
-  action VARCHAR(8) NOT NULL,        -- ASSERT | RETRACT | DNL
+  "ACTION" VARCHAR(8) NOT NULL,      -- ASSERT | RETRACT | DNL (reserved word: always quoted, DEV-24)
   evidence_hash VARCHAR(64),
   valid_from DATE NOT NULL,
   valid_to DATE NOT NULL,
@@ -287,7 +287,7 @@ CREATE TABLE GRAPH.OWNERSHIP_EVENT (
   control_type VARCHAR(10),          -- MAJORITY | JOINT | MINORITY | UNKNOWN
   status VARCHAR(10) NOT NULL,       -- PROPOSED | CONFIRMED | AMBIGUOUS | REJECTED
   stake_pct DECIMAL(7,4),
-  action VARCHAR(8) NOT NULL,        -- ASSERT | RETRACT
+  "ACTION" VARCHAR(8) NOT NULL,      -- ASSERT | RETRACT (reserved word: always quoted, DEV-24)
   evidence_hash VARCHAR(64),
   valid_from DATE NOT NULL,
   valid_to DATE NOT NULL,
@@ -349,7 +349,7 @@ CREATE TABLE GOV.DECISION_LOG (
   reviewer_role VARCHAR(12) NOT NULL,
   decided_at TIMESTAMP NOT NULL,
   batch_seed DECIMAL(10),
-  sample_json VARCHAR(20000),
+  sample_json VARCHAR(200000),       -- 5% of ~20k T0 links is ~1,000 ids (DEV-36)
   covered_count DECIMAL(9)
 );
 
@@ -478,6 +478,21 @@ CREATE TABLE TRUTH.GT_PLANT (
   expected VARCHAR(200)
 );
 ```
+
+---
+
+### 1.5 Additions by Track A (15 Oct 2026, additive only)
+Recorded in `docs/DECISIONS.md` (DEV-23 to DEV-35). No existing column changed type or meaning.
+
+- `"ACTION"`: `action` is a reserved word in Exasol, so the column is written as a quoted identifier. pyexasol connects with `lower_ident=True`; rows still read as `row["action"]`.
+- `STAGE.PINCODE_DISTRICT (pincode VARCHAR(6), district VARCHAR(60), state_code VARCHAR(2))`: shipped by the generator, loaded by `talos load`.
+- `RESOLVE.W_FACT_RUN (rec_key, source_system, source_row_id, exposure_component, product, gross_amount, ccf, exposure_amount)`: the run's exposure-bearing facts (stage 50).
+- `RESOLVE.V_ADMITTED_EDGE_UNDIRECTED (a, b)` and `RESOLVE.V_PAIR_TIER_FINAL` (all `PAIR_SCORE` columns plus `base_tier`, final `tier` / `tier_reason`, `recommendation`, `verdict_model`, `verdict_decision`, `verdict_confidence`).
+- `GRAPH.V_LINK_CURRENT`, `GRAPH.V_OWNERSHIP_CURRENT` (every event column, latest event per key in force today) and `GRAPH.V_CONTROL_EDGE (holder_key, held_key, control_type, stake_pct, held_name)`.
+- REPORT helpers: `V_CURRENT_RUN (run_id, business_date, known_at)` (newest run overall), `V_RUN_POLICY (run_id, capital_base, group_limit_pct, le_line_pct, t0_sample_pct, t0_sample_min, own_sample_pct, own_sample_min)`, `V_ENTITY_NAME (entity_key, entity_name)`, `V_EXPOSURE_CUBE` (GROUPING SETS cube with `cube_level`), `V_DECISION_AUDIT_LOG` (decision log plus the proposal's kind, subject, tier) and `V_DATA_QUALITY (issue, subject_key, detail, load_id)`.
+- Extra columns, appended after the contract columns: `V_RUNS` adds `row_count, lp_passes, load_ids_json, policy_event_ids_json, is_latest`; `V_GROUP_EXPOSURE` adds `reported_group`; `V_LINEAGE` adds `membership_kind, reviewer_role, decision, tier_reason`; `V_BREACHES` adds `reported_exposure, hidden_exposure, headroom, group_flags`; `V_PROPOSAL_QUEUE` adds `batch_failed, group_before_amt, group_after_amt, delta_amt, group_key`; `V_PIPELINE_SUMMARY` adds `grey_band_pairs`.
+- `V_GROUP_CHANGES` compares consecutive runs of the same business date (DEV-33).
+- Evidence JSON keys the orchestrator reads: OWNERSHIP `stake_pct`, `effective_from`; INTERDEP `stake_pct` (= `share_pct`), `effective_from` (= `noted_on`); CONTROL_RULING `holders` (list of entity keys), `stakes` (holder to stake), `effective_from`.
 
 ---
 
