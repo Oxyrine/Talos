@@ -197,6 +197,34 @@ def _ensure_entity_exists(
     )
 
 
+# A proposal is superseded once a later proposal of the same kind is filed for its subject
+# (the pipeline re-files when the evidence changes). Superseded proposals cannot be decided.
+NOT_SUPERSEDED_SQL = (
+    "NOT EXISTS (SELECT 1 FROM GOV.PROPOSAL n WHERE n.kind = p.kind "
+    "AND n.subject_key = p.subject_key AND n.filed_at > p.filed_at)"
+)
+
+
+def _raise_if_superseded(conn: ExaConnection, proposal_id: str) -> None:
+    """Raise ProposalConflictError if a newer proposal replaced this one."""
+    newer = conn.execute(
+        """
+        SELECT n.proposal_id
+        FROM GOV.PROPOSAL p
+        JOIN GOV.PROPOSAL n
+          ON n.kind = p.kind AND n.subject_key = p.subject_key AND n.filed_at > p.filed_at
+        WHERE p.proposal_id = {superseded_pid}
+        ORDER BY n.filed_at DESC, n.proposal_id DESC
+        LIMIT 1
+        """,
+        query_params={"superseded_pid": proposal_id},
+    ).fetchone()
+    if newer is not None:
+        raise ProposalConflictError(
+            f"Proposal {proposal_id} was superseded by {newer['proposal_id']} (newer evidence)."
+        )
+
+
 def decide(
     proposal_id: str,
     decision: Literal["APPROVE", "REJECT", "DEFER"],
@@ -240,6 +268,12 @@ def decide(
             raise ValueError(f"Proposal {proposal_id} not found.")
 
         p_kind = prop["kind"]
+        if p_kind == "CONTROL_RULING":
+            raise ValueError(
+                f"Proposal {proposal_id} is a CONTROL_RULING; decide it with rule() "
+                "(ruling NONE records that no control applies)."
+            )
+        _raise_if_superseded(conn, proposal_id)
         p_subj = prop["subject_key"]
         p_rec = prop["rec_key"]
         p_ent = prop["entity_key"]
@@ -532,8 +566,9 @@ def batch_sample(
             ) term ON p.proposal_id = term.proposal_id
             WHERE p.batch_id = {batch_id}
               AND term.proposal_id IS NULL
+              AND {not_superseded}
             ORDER BY p.proposal_id
-            """,
+            """.replace("{not_superseded}", NOT_SUPERSEDED_SQL),
             query_params={"batch_id": batch_id},
         )
         rows = stmt.fetchall()
@@ -619,8 +654,9 @@ def batch_decide(
             ) term ON p.proposal_id = term.proposal_id
             WHERE p.batch_id = {batch_id}
               AND term.proposal_id IS NULL
+              AND {not_superseded}
             ORDER BY p.proposal_id
-            """,
+            """.replace("{not_superseded}", NOT_SUPERSEDED_SQL),
             query_params={"batch_id": batch_id},
         )
         rows = stmt.fetchall()
@@ -678,13 +714,14 @@ def batch_decide(
 
             # Single atomic insert into GOV.DECISION_COVERS with computed in_sample (no UPDATE)
             sample_ids_sql = ", ".join(f"'{pid}'" for pid in sorted(expected_sample_ids))
+            covered_ids_sql = ", ".join(f"'{pid}'" for pid in sorted(covered_props))
             conn.execute(
                 f"""
                 INSERT INTO GOV.DECISION_COVERS (decision_id, proposal_id, in_sample)
                 SELECT {{decision_id}}, p.proposal_id,
                        CASE WHEN p.proposal_id IN ({sample_ids_sql}) THEN TRUE ELSE FALSE END
                 FROM GOV.PROPOSAL p
-                WHERE p.batch_id = {{batch_id}}
+                WHERE p.batch_id = {{batch_id}} AND p.proposal_id IN ({covered_ids_sql})
                 """,
                 query_params={"decision_id": dec_id, "batch_id": batch_id},
             )
@@ -711,8 +748,10 @@ def batch_decide(
                         p.proposal_id
                     FROM GOV.PROPOSAL p
                     WHERE p.batch_id = {batch_id} AND p.kind = 'RECORD_LINK'
+                      AND p.proposal_id IN ({covered_ids_sql!r})
                     """,
                     query_params={
+                        "covered_ids_sql": covered_ids_sql,
                         "time_tag": time_tag,
                         "batch_id": batch_id,
                         "recorded_at": decided_at_str,
@@ -731,9 +770,11 @@ def batch_decide(
                         {decision_id}
                     FROM GOV.PROPOSAL p
                     WHERE p.batch_id = {batch_id} AND p.kind = 'RECORD_LINK'
+                      AND p.proposal_id IN ({covered_ids_sql!r})
                       AND p.entity_key NOT IN (SELECT entity_key FROM GRAPH.ENTITY)
                     """,
                     query_params={
+                        "covered_ids_sql": covered_ids_sql,
                         "batch_id": batch_id,
                         "recorded_at": decided_at_str,
                         "decision_id": dec_id,
@@ -938,6 +979,8 @@ def rule(
         # Check proposal kind
         if prop["kind"] != "CONTROL_RULING":
             raise ValueError(f"Proposal {proposal_id} is of kind '{prop['kind']}', not 'CONTROL_RULING'.")
+
+        _raise_if_superseded(conn, proposal_id)
 
         # Check existing terminal ruling
         term_stmt = conn.execute(

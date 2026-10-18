@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Iterable
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 import pyarrow.parquet as pq
 from pyexasol import ExaConnection
 
-from orchestrator.db import connect
+from orchestrator.db import connect, transaction
 from orchestrator.policy import load_thresholds
 
 TABLE_TARGETS: dict[str, str] = {
@@ -58,18 +59,35 @@ def _iter_parquet_tuples(file_path: Path) -> Iterable[tuple[Any, ...]]:
 
 
 def _sql_literal(value: Any) -> str:
-    """Render one Python value as an Exasol SQL literal."""
+    """Render one Python value as an Exasol SQL literal.
+
+    Raises ValueError for NaN or infinite numbers and TypeError for types with no safe
+    literal (bytes, lists, ...), rather than emitting SQL that fails or stores the wrong value.
+    Timezone-aware datetimes are converted to UTC, matching how known_at is compared.
+    """
     if value is None:
         return "NULL"
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float, Decimal)):
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"cannot load non-finite number {value!r}")
+        return repr(value)
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError(f"cannot load non-finite number {value!r}")
         return str(value)
     if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(UTC).replace(tzinfo=None)
         return "'" + value.strftime("%Y-%m-%d %H:%M:%S.%f") + "'"
     if isinstance(value, date):
         return "'" + value.isoformat() + "'"
-    return "'" + str(value).replace("'", "''") + "'"
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    raise TypeError(f"cannot load a {type(value).__name__} value as a SQL literal")
 
 
 def insert_rows(conn: ExaConnection, table_name: str, columns: list[str], rows: Iterable[tuple], chunk: int = 2000) -> int:
@@ -345,7 +363,8 @@ def load(
     """Load Parquet files from directory into Exasol tables.
 
     Connects as TALOS_LOADER if conn is None.
-    Idempotent: deletes matching load_ids or truncates table before loading.
+    Idempotent: a file whose load_ids are already present is skipped; tables without a
+    load_id are replaced. Each file is loaded in one transaction (all rows or none).
     Returns mapping of table_name -> row_count.
     """
     directory = Path(directory)
@@ -370,6 +389,7 @@ def load(
 
             # Idempotency without deleting evidence: raw tables are append-only (no role holds
             # DELETE on RAW_*), so a load_id that is already present is skipped, not replaced.
+            # Each file loads in one transaction, so a present load_id is always a complete load.
             # Tables without a load_id (TRUTH, STAGE.PINCODE_DISTRICT) are replaced whole.
             if "load_id" in schema_names:
                 table_pydict = pq.read_table(file_path, columns=["load_id"]).to_pydict()
@@ -386,10 +406,13 @@ def load(
                         )
                     results[table_name] = int(conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchval() or 0)
                     continue
-            else:
-                conn.execute(f"TRUNCATE TABLE {table_name}")
-
-            insert_rows(conn, table_name, list(schema_names), _iter_parquet_tuples(file_path))
+            with transaction(conn):
+                if "load_id" not in schema_names:
+                    conn.execute(f"TRUNCATE TABLE {table_name}")
+                try:
+                    insert_rows(conn, table_name, list(schema_names), _iter_parquet_tuples(file_path))
+                except (TypeError, ValueError) as e:
+                    raise ValueError(f"{file_path.name}: {e}") from e
 
             # Count rows
             stmt = conn.execute(f"SELECT COUNT(*) FROM {table_name}")

@@ -153,6 +153,19 @@ def test_pending_ruling_is_unassigned(main_run):
     assert m[E("PEND_J")]["flags"] == "UNASSIGNED"
 
 
+def test_rejected_ruling_is_not_unassigned(main_run):
+    m = membership(main_run.run_id)
+    assert m[E("REJ_J")]["group"] == E("REJ_J")
+    assert m[E("REJ_J")]["flags"] in (None, "")
+
+
+def test_superseded_ruling_proposal_is_not_pending(main_run):
+    # FXP-SUP-OLD is never decided, but FXP-SUP-NEW (same subject, filed later) was ruled.
+    assert membership(main_run.run_id)[E("SUP_J")]["flags"] in (None, "")
+    before_ruling = publish("2026-09-30", "2026-09-05 12:00:00")
+    assert membership(before_ruling.run_id)[E("SUP_J")]["flags"] == "UNASSIGNED"
+
+
 def test_jv_single_joins_controller(main_run):
     m = membership(main_run.run_id)
     assert m[E("JVS_J")]["group"] == E("JVS_A")
@@ -248,3 +261,28 @@ def test_policy_change_capital_base(fx):
         assert policy_in_force(conn, "2026-09-30", "2026-09-10 00:00:00")[0]["CAPITAL_BASE_INR"] == 4_000_000_000
     finally:
         conn.close()
+
+
+def test_concurrent_publishes_match_sequential(fx):
+    """Runs share the RESOLVE.W_*_RUN working tables; concurrent runs must not corrupt each other."""
+    import threading
+
+    from orchestrator.pipeline import publish_run
+
+    expected = publish("2026-09-30", "2026-10-11 00:00:00")
+    results: dict[int, object] = {}
+
+    def run(i: int) -> None:
+        try:
+            results[i] = publish_run(business_date="2026-09-30", known_at="2026-10-11 00:00:00", manifest=MANIFEST)
+        except Exception as e:  # surfaced by the assertion below
+            results[i] = e
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    for i, res in sorted(results.items()):
+        assert not isinstance(res, Exception), f"run {i} failed: {res}"
+        assert (res.status, res.output_hash, res.row_count) == ("OK", expected.output_hash, expected.row_count), i

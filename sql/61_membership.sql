@@ -5,8 +5,8 @@
 --     own group; group_key = head entity key.
 --   Flags (comma-joined, alphabetical):
 --     CYCLE_HEADED  no member is uncontrolled (a rootless cycle)
---     UNASSIGNED    a member has a CONTROL_RULING proposal filed by known_at and no RULING
---                   decided by known_at
+--     UNASSIGNED    a member's latest CONTROL_RULING proposal filed by known_at has no
+--                   terminal decision (RULING, REJECT, APPROVE) by known_at
 --     UNRESOLVED    the head is a U: pseudo-entity (an unlinked book record)
 
 INSERT INTO GOV.RUN_MEMBERSHIP (run_id, group_key, entity_key, membership_kind, is_head, group_flags)
@@ -35,11 +35,17 @@ heads AS (
   QUALIFY ROW_NUMBER() OVER (PARTITION BY label ORDER BY uncontrolled DESC, exposure DESC, entity_id) = 1
 ),
 pending AS (
+  -- The latest CONTROL_RULING proposal per subject filed by known_at (a re-filed proposal
+  -- supersedes the older one), still without a terminal decision at known_at.
   SELECT DISTINCT p.held_entity_key
-  FROM GOV.PROPOSAL p
-  WHERE p.kind = 'CONTROL_RULING' AND p.filed_at <= {known_at}
-    AND NOT EXISTS (SELECT 1 FROM GOV.DECISION_LOG d
-                    WHERE d.proposal_id = p.proposal_id AND d.decision = 'RULING'
+  FROM (
+    SELECT proposal_id, held_entity_key
+    FROM GOV.PROPOSAL
+    WHERE kind = 'CONTROL_RULING' AND filed_at <= {known_at}
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_key ORDER BY filed_at DESC, proposal_id DESC) = 1
+  ) p
+  WHERE NOT EXISTS (SELECT 1 FROM GOV.DECISION_LOG d
+                    WHERE d.proposal_id = p.proposal_id AND d.decision IN ('RULING', 'REJECT', 'APPROVE')
                       AND d.decided_at <= {known_at})
 ),
 lf AS (

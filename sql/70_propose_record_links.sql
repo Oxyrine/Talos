@@ -2,7 +2,8 @@
 --   Candidates: the best non-T3 pair per book record (T0 before T1 before T2, then
 --   composite), plus every T3 pair, so a record with a wrong-PAN T3 and a true T1 shows both.
 --   entity_key = 'E:' || cin of the registry side; subject_key = link_key = rec_key > entity.
---   Evidence holds names, places and ID status only: identifiers appear as hashed tokens.
+--   Evidence holds names, places and ID status (agree/conflict/missing) only: no identifiers
+--   or identifier hashes. Free text is JSON-escaped (control characters become spaces).
 --   rupee_impact = the record's exposure in the baseline run.
 --   T0 proposals of this job share one sampled batch, B-REC-<hash of their sorted ids>.
 --   Not filed again: links already asserted, rejections (DNL) with the same evidence, and
@@ -39,22 +40,20 @@ ev AS (
   SELECT b.pair_key, b.rec_a, b.tier, b.tier_reason, b.recommendation,
          'E:' || SUBSTR(b.rec_b, 5) AS entity_key,
          b.rec_a || '>E:' || SUBSTR(b.rec_b, 5) AS subject_key,
-         '{{"kind":"RECORD_LINK","rec_key":"' || b.rec_a || '","entity_key":"E:' || SUBSTR(b.rec_b, 5)
+         '{{"kind":"RECORD_LINK","rec_key":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(b.rec_a, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","entity_key":"E:' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(SUBSTR(b.rec_b, 5), ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
          || '","source_a":"' || a.source_system || '","source_b":"REG"'
-         || ',"name_a_raw":"' || REPLACE(REPLACE(COALESCE(a.name_raw, ''), '\', '\\'), '"', '\"')
-         || '","name_b_raw":"' || REPLACE(REPLACE(COALESCE(r.name_raw, ''), '\', '\\'), '"', '\"')
-         || '","name_a_std":"' || COALESCE(a.name_std, '') || '","name_b_std":"' || COALESCE(r.name_std, '')
-         || '","city_a":"' || COALESCE(a.city, '') || '","city_b":"' || COALESCE(r.city, '')
-         || '","pincode_a":"' || COALESCE(a.pincode, '') || '","pincode_b":"' || COALESCE(r.pincode, '')
-         || '","state_a":"' || COALESCE(a.state_code, '') || '","state_b":"' || COALESCE(r.state_code, '')
+         || ',"name_a_raw":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(a.name_raw, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","name_b_raw":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(r.name_raw, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","name_a_std":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(a.name_std, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","name_b_std":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(r.name_std, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","city_a":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(a.city, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","city_b":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(r.city, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","pincode_a":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(a.pincode, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","pincode_b":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(r.pincode, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","state_a":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(a.state_code, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","state_b":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(r.state_code, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
          || '","id_status":{{"PAN":"'
          || CASE WHEN ta.pan_t IS NULL OR tb.pan_t IS NULL THEN 'missing' WHEN ta.pan_t = tb.pan_t THEN 'agree' ELSE 'conflict' END
          || '","CIN":"'
          || CASE WHEN ta.cin_t IS NULL OR tb.cin_t IS NULL THEN 'missing' WHEN ta.cin_t = tb.cin_t THEN 'agree' ELSE 'conflict' END
          || '","LEI":"'
          || CASE WHEN ta.lei_t IS NULL OR tb.lei_t IS NULL THEN 'missing' WHEN ta.lei_t = tb.lei_t THEN 'agree' ELSE 'conflict' END
-         || '"}},"id_tokens_a":{{"PAN":"' || COALESCE(SUBSTR(ta.pan_t, 1, 16), '') || '","CIN":"' || COALESCE(SUBSTR(ta.cin_t, 1, 16), '')
-         || '"}},"id_tokens_b":{{"PAN":"' || COALESCE(SUBSTR(tb.pan_t, 1, 16), '') || '","CIN":"' || COALESCE(SUBSTR(tb.cin_t, 1, 16), '')
          || '"}},"via":"' || b.via || '","name_dist":' || CAST(b.name_dist AS VARCHAR(8))
          || ',"name_sim":' || CAST(CAST(b.name_sim AS DECIMAL(6,4)) AS VARCHAR(10))
          || ',"composite":' || CAST(CAST(b.composite AS DECIMAL(6,4)) AS VARCHAR(10))

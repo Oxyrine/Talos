@@ -73,14 +73,14 @@ own AS (
 ev AS (
   SELECT own.*,
          'CONTROL:E:' || holder_cin || '>E:' || held_cin AS subject_key,
-         '{{"kind":"OWNERSHIP","holder_entity_key":"E:' || holder_cin || '","held_entity_key":"E:' || held_cin
-         || '","holder_name":"' || REPLACE(COALESCE(holder_name, ''), '"', '\"')
-         || '","held_name":"' || REPLACE(COALESCE(held_name, ''), '"', '\"')
+         '{{"kind":"OWNERSHIP","holder_entity_key":"E:' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(holder_cin, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","held_entity_key":"E:' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(held_cin, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","holder_name":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(holder_name, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","held_name":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(held_name, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
          || '","stake_pct":' || CAST(stake_pct AS VARCHAR(12))
          || ',"control_flag":' || CASE WHEN control_flag THEN 'true' ELSE 'false' END
          || ',"control_type":"MAJORITY","effective_from":"' || TO_CHAR(effective_from, 'YYYY-MM-DD')
-         || '","filed_on":"' || TO_CHAR(filed_on, 'YYYY-MM-DD') || '","registry_load_id":"' || load_id
-         || '","holder_group_code":"' || COALESCE(holder_code, '') || '","held_group_code":"' || COALESCE(held_code, '')
+         || '","filed_on":"' || TO_CHAR(filed_on, 'YYYY-MM-DD') || '","registry_load_id":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(load_id, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","holder_group_code":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(holder_code, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","held_group_code":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(held_code, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
          || '","corroborated":' || CASE WHEN corroborated = 1 THEN 'true' ELSE 'false' END || '}}' AS evidence_json
   FROM own
 ),
@@ -155,8 +155,8 @@ amb AS (
          COUNT(*) AS n_holders,
          MAX(stake_pct) AS max_stake,
          MAX(effective_from) AS effective_from,
-         '["' || GROUP_CONCAT('E:' || holder_cin ORDER BY holder_cin SEPARATOR '","') || '"]' AS holders_json,
-         '{{' || GROUP_CONCAT('"E:' || holder_cin || '":' || CAST(stake_pct AS VARCHAR(12))
+         '["' || GROUP_CONCAT('E:' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(holder_cin, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') ORDER BY holder_cin SEPARATOR '","') || '"]' AS holders_json,
+         '{{' || GROUP_CONCAT('"E:' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(holder_cin, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '":' || CAST(stake_pct AS VARCHAR(12))
                               ORDER BY holder_cin SEPARATOR ',') || '}}' AS stakes_json
   FROM q
   GROUP BY held_cin
@@ -164,8 +164,8 @@ amb AS (
 ),
 ev AS (
   SELECT amb.*, 'JV:E:' || amb.held_cin AS subject_key,
-         '{{"kind":"CONTROL_RULING","held_entity_key":"E:' || amb.held_cin
-         || '","held_name":"' || REPLACE(COALESCE(f.entity_name, ''), '"', '\"')
+         '{{"kind":"CONTROL_RULING","held_entity_key":"E:' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(amb.held_cin, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","held_name":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(f.entity_name, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
          || '","holders":' || amb.holders_json || ',"stakes":' || amb.stakes_json
          || ',"effective_from":"' || TO_CHAR(amb.effective_from, 'YYYY-MM-DD') || '"}}' AS evidence_json
   FROM amb
@@ -247,11 +247,11 @@ one AS (
 ),
 ev AS (
   SELECT one.*,
-         '{{"kind":"INTERDEP","holder_entity_key":"' || holder_key || '","held_entity_key":"' || held_key
-         || '","cust_id":"' || cust_id || '","depends_on_cust_id":"' || depends_on_cust_id
+         '{{"kind":"INTERDEP","holder_entity_key":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(holder_key, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","held_entity_key":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(held_key, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
+         || '","cust_id":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(cust_id, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","depends_on_cust_id":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(depends_on_cust_id, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"')
          || '","share_pct":' || CAST(share_pct AS VARCHAR(8)) || ',"stake_pct":' || CAST(share_pct AS VARCHAR(8))
          || ',"effective_from":"' || TO_CHAR(noted_on, 'YYYY-MM-DD') || '","noted_on":"' || TO_CHAR(noted_on, 'YYYY-MM-DD')
-         || '","holder_basis":"' || holder_basis || '","held_basis":"' || held_basis || '"}}' AS evidence_json
+         || '","holder_basis":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(holder_basis, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '","held_basis":"' || REPLACE(REPLACE(REGEXP_REPLACE(COALESCE(held_basis, ''), '[\x00-\x1f]', ' '), '\', '\\'), '"', '\"') || '"}}' AS evidence_json
   FROM one
 ),
 p AS (

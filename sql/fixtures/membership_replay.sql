@@ -10,6 +10,9 @@
 --   CH    six-level chain CH0->...->CH6: 7 members.
 --   MIN   minority edge M1->M2: never merges.
 --   PEND  CONTROL_RULING proposal filed, no ruling: UNASSIGNED.
+--   REJ   CONTROL_RULING proposal rejected: a terminal decision, so not UNASSIGNED.
+--   SUP   CONTROL_RULING re-filed on 5 Sep and ruled on 6 Sep; the older proposal is never
+--         decided but is superseded, so not UNASSIGNED after the ruling (UNASSIGNED before).
 --   JVS / JVJ / JVN / JVC   joint ventures ruled SINGLE / JOINT / NONE / CONNECTED; the
 --         CONNECTED controllers' link is approved only on 2026-10-10.
 -- Replay cases:
@@ -30,7 +33,7 @@ FROM (
   UNION ALL SELECT 'CH_0' FROM DUAL UNION ALL SELECT 'CH_1' FROM DUAL UNION ALL SELECT 'CH_2' FROM DUAL UNION ALL SELECT 'CH_3' FROM DUAL
   UNION ALL SELECT 'CH_4' FROM DUAL UNION ALL SELECT 'CH_5' FROM DUAL UNION ALL SELECT 'CH_6' FROM DUAL
   UNION ALL SELECT 'MIN_1' FROM DUAL UNION ALL SELECT 'MIN_2' FROM DUAL
-  UNION ALL SELECT 'PEND_J' FROM DUAL
+  UNION ALL SELECT 'PEND_J' FROM DUAL UNION ALL SELECT 'REJ_J' FROM DUAL UNION ALL SELECT 'SUP_J' FROM DUAL
   UNION ALL SELECT 'JVS_A' FROM DUAL UNION ALL SELECT 'JVS_B' FROM DUAL UNION ALL SELECT 'JVS_J' FROM DUAL
   UNION ALL SELECT 'JVJ_A' FROM DUAL UNION ALL SELECT 'JVJ_B' FROM DUAL UNION ALL SELECT 'JVJ_J' FROM DUAL
   UNION ALL SELECT 'JVN_A' FROM DUAL UNION ALL SELECT 'JVN_B' FROM DUAL UNION ALL SELECT 'JVN_J' FROM DUAL
@@ -50,7 +53,7 @@ SELECT * FROM (
   UNION ALL SELECT 'CH_3', 1 FROM DUAL UNION ALL SELECT 'CH_4', 1 FROM DUAL UNION ALL SELECT 'CH_5', 1 FROM DUAL
   UNION ALL SELECT 'CH_6', 1 FROM DUAL
   UNION ALL SELECT 'MIN_1', 70 FROM DUAL UNION ALL SELECT 'MIN_2', 80 FROM DUAL
-  UNION ALL SELECT 'PEND_J', 90 FROM DUAL
+  UNION ALL SELECT 'PEND_J', 90 FROM DUAL UNION ALL SELECT 'REJ_J', 91 FROM DUAL UNION ALL SELECT 'SUP_J', 92 FROM DUAL
   UNION ALL SELECT 'JVS_A', 1000 FROM DUAL UNION ALL SELECT 'JVS_B', 2000 FROM DUAL UNION ALL SELECT 'JVS_J', 500 FROM DUAL
   UNION ALL SELECT 'JVJ_A', 1000 FROM DUAL UNION ALL SELECT 'JVJ_B', 2000 FROM DUAL UNION ALL SELECT 'JVJ_J', 500 FROM DUAL
   UNION ALL SELECT 'JVN_A', 1000 FROM DUAL UNION ALL SELECT 'JVN_B', 2000 FROM DUAL UNION ALL SELECT 'JVN_J', 500 FROM DUAL
@@ -142,6 +145,26 @@ INSERT INTO GOV.PROPOSAL (proposal_id, kind, subject_key, held_entity_key, tier,
                           evidence_hash, rupee_impact, filed_at)
 VALUES ('FXP-PEND', 'CONTROL_RULING', 'JV:E:FX-PEND_J', 'E:FX-PEND_J', 'T3', 'AMBIGUOUS_CONTROL',
         '{{"holders":[]}}', 'fx', 0, '2026-09-01 00:00:00');
+
+-- REJ_J: the ruling proposal was rejected. SUP_J: re-filed with new evidence, the newer one ruled.
+INSERT INTO GOV.PROPOSAL (proposal_id, kind, subject_key, held_entity_key, tier, tier_reason, evidence_json,
+                          evidence_hash, rupee_impact, filed_at)
+SELECT 'FXP-REJ', 'CONTROL_RULING', 'JV:E:FX-REJ_J', 'E:FX-REJ_J', 'T3', 'AMBIGUOUS_CONTROL',
+       '{{"holders":[]}}', 'fx', 0, TIMESTAMP '2026-09-01 00:00:00' FROM DUAL
+UNION ALL SELECT 'FXP-SUP-OLD', 'CONTROL_RULING', 'JV:E:FX-SUP_J', 'E:FX-SUP_J', 'T3', 'AMBIGUOUS_CONTROL',
+       '{{"holders":["old"]}}', 'fx-old', 0, TIMESTAMP '2026-09-01 00:00:00' FROM DUAL
+UNION ALL SELECT 'FXP-SUP-NEW', 'CONTROL_RULING', 'JV:E:FX-SUP_J', 'E:FX-SUP_J', 'T3', 'AMBIGUOUS_CONTROL',
+       '{{"holders":["new"]}}', 'fx-new', 0, TIMESTAMP '2026-09-05 00:00:00' FROM DUAL;
+
+INSERT INTO GOV.DECISION_LOG (decision_id, decision, proposal_id, ruling, reason, reviewer, reviewer_role, decided_at)
+SELECT 'FXD-REJ', 'REJECT', 'FXP-REJ', CAST(NULL AS VARCHAR(10)), 'fixture: rejected', 'fixture', 'APPROVER',
+       TIMESTAMP '2026-09-02 00:00:00' FROM DUAL
+UNION ALL SELECT 'FXD-SUP', 'RULING', 'FXP-SUP-NEW', 'NONE', 'fixture: no control', 'fixture', 'APPROVER',
+       TIMESTAMP '2026-09-06 00:00:00' FROM DUAL;
+
+INSERT INTO GOV.DECISION_COVERS (decision_id, proposal_id, in_sample)
+SELECT 'FXD-REJ', 'FXP-REJ', TRUE FROM DUAL
+UNION ALL SELECT 'FXD-SUP', 'FXP-SUP-NEW', TRUE FROM DUAL;
 
 DROP TABLE STAGE.FX_AMOUNTS;
 

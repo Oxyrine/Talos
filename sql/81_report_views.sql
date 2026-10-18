@@ -228,10 +228,13 @@ term AS (
   WHERE d.decision IN ('APPROVE', 'REJECT', 'BATCH_APPROVE', 'RULING')
 ),
 open_p AS (
+  -- Undecided and not superseded by a later proposal for the same subject.
   SELECT p.*
   FROM GOV.PROPOSAL p
   LEFT JOIN term t ON t.proposal_id = p.proposal_id
   WHERE t.proposal_id IS NULL
+    AND NOT EXISTS (SELECT 1 FROM GOV.PROPOSAL n
+                    WHERE n.kind = p.kind AND n.subject_key = p.subject_key AND n.filed_at > p.filed_at)
 ),
 failed AS (
   SELECT DISTINCT batch_id FROM GOV.DECISION_LOG WHERE decision = 'BATCH_FAILED'

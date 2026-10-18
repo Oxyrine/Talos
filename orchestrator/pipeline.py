@@ -12,7 +12,14 @@ from typing import Any, Literal
 
 from pyexasol import ExaConnection
 
-from orchestrator.db import REPO_ROOT, connect, run_sql_file
+from orchestrator.db import (
+    REPO_ROOT,
+    connect,
+    get_id_token_key,
+    is_transaction_conflict,
+    run_sql_file,
+    transaction,
+)
 from orchestrator.policy import policy_in_force
 from orchestrator.replay import compute_output_hash, get_git_code_version
 
@@ -86,11 +93,175 @@ def _record_timing(
     )
 
 
+def normalize_known_at(known_at: datetime | date | str | None, default: datetime | None = None) -> str:
+    """Render known_at as a UTC 'YYYY-MM-DD HH:MM:SS[.ffffff]' literal.
+
+    Accepts datetimes (naive ones are taken as UTC, aware ones are converted), dates
+    (midnight) and ISO strings such as '2026-10-01', '2026-10-01T06:00:00' or
+    '2026-10-01 06:00:00.000000+05:30'. None means `default`, else now.
+    """
+    if known_at is None:
+        known_at = default or datetime.now(UTC)
+    if isinstance(known_at, str):
+        try:
+            known_at = datetime.fromisoformat(known_at.strip())
+        except ValueError as e:
+            raise ValueError(f"known_at {known_at!r} is not an ISO date or timestamp") from e
+    elif not isinstance(known_at, datetime):
+        known_at = datetime(known_at.year, known_at.month, known_at.day)
+    if known_at.tzinfo is not None:
+        known_at = known_at.astimezone(UTC).replace(tzinfo=None)
+    return known_at.strftime("%Y-%m-%d %H:%M:%S.%f" if known_at.microsecond else "%Y-%m-%d %H:%M:%S")
+
+
 def _filed_at_after(known_str: str) -> str:
-    """Wall-clock filing time, kept at least one second after known_at."""
-    known_dt = datetime.strptime(known_str[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-    filed_dt = max(datetime.now(UTC).replace(microsecond=0), known_dt + timedelta(seconds=1))
+    """Wall-clock filing time, kept at least one second after known_at (a normalize_known_at string)."""
+    known_dt = datetime.fromisoformat(known_str).replace(tzinfo=UTC)
+    filed_dt = max(datetime.now(UTC).replace(microsecond=0), (known_dt + timedelta(seconds=1)).replace(microsecond=0))
     return filed_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+PUBLISH_ATTEMPTS = 5
+
+
+def _publish_once(
+    conn: ExaConnection,
+    sql_path: Path,
+    bd_str: str,
+    known_str: str,
+    run_id: str,
+    started_at: datetime,
+    manifest: dict | None,
+    replay_of: str | None,
+) -> RunResult:
+    """One attempt at a report run; publish_run wraps it in a transaction."""
+    # Resolve load IDs and policy events
+    if manifest:
+        load_ids = manifest.get("load_ids", {})
+        policy_event_ids = manifest.get("policy_event_ids", {})
+        policy_values, _ = policy_in_force(conn, bd_str, known_str)
+    else:
+        load_ids = {
+            "LOS": _resolve_latest_load_id(conn, "RAW_LOS.CUSTOMER", "business_date", bd_str, known_str),
+            "TSY": _resolve_latest_load_id(conn, "RAW_TREASURY.HOLDING", "business_date", bd_str, known_str),
+            "GTE": _resolve_latest_load_id(conn, "RAW_GUARANTEE.GUARANTEE", "business_date", bd_str, known_str),
+            "COL": _resolve_latest_load_id(conn, "RAW_COLLATERAL.PLEDGE", "business_date", bd_str, known_str),
+            "REG": _resolve_latest_load_id(conn, "RAW_REGISTRY.ENTITY_FILING", None, bd_str, known_str),
+        }
+        policy_values, policy_event_ids = policy_in_force(conn, bd_str, known_str)
+
+    lp_max_passes = int(policy_values.get("LP_MAX_PASSES", 50))
+    code_version = get_git_code_version()
+
+    params: dict[str, Any] = {
+        "business_date": bd_str,
+        "known_at": known_str,
+        "run_id": run_id,
+        "baseline_run": run_id,
+        "los_load_id": load_ids.get("LOS", ""),
+        "tsy_load_id": load_ids.get("TSY", ""),
+        "gte_load_id": load_ids.get("GTE", ""),
+        "col_load_id": load_ids.get("COL", ""),
+        "reg_load_id": load_ids.get("REG", ""),
+        **policy_values,
+    }
+
+    # 1. Required stage: 50_asof_links_edges.sql & 51_components_init.sql
+    run_sql_file(conn, sql_path / "50_asof_links_edges.sql", **params)
+    run_sql_file(conn, sql_path / "51_components_init.sql", **params)
+
+    # 2. Required stage: Loop 52_components_pass.sql
+    converged = False
+    lp_passes = 0
+    pass_file = sql_path / "52_components_pass.sql"
+    while lp_passes < lp_max_passes:
+        lp_passes += 1
+        rowcounts = run_sql_file(conn, pass_file, **params)
+        total_mod = sum(rc for rc in rowcounts if rc > 0)
+        if total_mod == 0:
+            converged = True
+            break
+
+    if not converged:
+        finished_at = datetime.now(UTC)
+        conn.execute(
+            """
+            INSERT INTO GOV.REPORT_RUN (
+                run_id, business_date, known_at, load_ids_json, policy_event_ids_json,
+                code_version, output_hash, row_count, lp_passes, status, replay_of,
+                started_at, finished_at
+            ) VALUES (
+                {run_id}, {business_date}, {known_at}, {load_ids_json}, {policy_event_ids_json},
+                {code_version}, NULL, 0, {lp_passes}, 'LP_ABORTED', {replay_of},
+                {started_at}, {finished_at}
+            )
+            """,
+            query_params={
+                "run_id": run_id,
+                "business_date": bd_str,
+                "known_at": known_str,
+                "load_ids_json": json.dumps(load_ids),
+                "policy_event_ids_json": json.dumps(policy_event_ids),
+                "code_version": code_version,
+                "lp_passes": lp_passes,
+                "replay_of": replay_of,
+                "started_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+        return RunResult(
+            run_id=run_id,
+            output_hash=None,
+            status="LP_ABORTED",
+            lp_passes=lp_passes,
+            row_count=0,
+        )
+
+    # 3. Post-component stages: 60, 61, 62, 63
+    for step in ["60_entity_exposure.sql", "61_membership.sql", "62_run_output.sql", "63_reported_baseline.sql"]:
+        run_sql_file(conn, sql_path / step, **params)
+
+    # 4. Hash and row count computation
+    output_hash, row_count = compute_output_hash(conn, run_id)
+    finished_at = datetime.now(UTC)
+
+    # 5. Insert successful run record
+    conn.execute(
+        """
+        INSERT INTO GOV.REPORT_RUN (
+            run_id, business_date, known_at, load_ids_json, policy_event_ids_json,
+            code_version, output_hash, row_count, lp_passes, status, replay_of,
+            started_at, finished_at
+        ) VALUES (
+            {run_id}, {business_date}, {known_at}, {load_ids_json}, {policy_event_ids_json},
+            {code_version}, {output_hash}, {row_count}, {lp_passes}, 'OK', {replay_of},
+            {started_at}, {finished_at}
+        )
+        """,
+        query_params={
+            "run_id": run_id,
+            "business_date": bd_str,
+            "known_at": known_str,
+            "load_ids_json": json.dumps(load_ids),
+            "policy_event_ids_json": json.dumps(policy_event_ids),
+            "code_version": code_version,
+            "output_hash": output_hash,
+            "row_count": row_count,
+            "lp_passes": lp_passes,
+            "replay_of": replay_of,
+            "started_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    )
+
+    return RunResult(
+        run_id=run_id,
+        output_hash=output_hash,
+        status="OK",
+        lp_passes=lp_passes,
+        row_count=row_count,
+    )
+
 
 
 def publish_run(
@@ -123,147 +294,26 @@ def publish_run(
 
     started_at = datetime.now(UTC)
     bd_str = business_date.isoformat() if isinstance(business_date, date) else str(business_date)
-    if known_at is None:
-        known_dt = started_at
-        known_str = known_dt.strftime("%Y-%m-%d %H:%M:%S")
-    elif isinstance(known_at, datetime):
-        known_dt = known_at
-        known_str = known_dt.strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        known_str = str(known_at)
+    known_str = normalize_known_at(known_at, default=started_at)
 
     now_tag = started_at.strftime("%Y%m%d%H%M%S")
     rand_hex = secrets.token_hex(2)
     run_id = f"R-{now_tag}-{rand_hex}"
 
     try:
-        # Resolve load IDs and policy events
-        if manifest:
-            load_ids = manifest.get("load_ids", {})
-            policy_event_ids = manifest.get("policy_event_ids", {})
-            policy_values, _ = policy_in_force(conn, bd_str, known_str)
-        else:
-            load_ids = {
-                "LOS": _resolve_latest_load_id(conn, "RAW_LOS.CUSTOMER", "business_date", bd_str, known_str),
-                "TSY": _resolve_latest_load_id(conn, "RAW_TREASURY.HOLDING", "business_date", bd_str, known_str),
-                "GTE": _resolve_latest_load_id(conn, "RAW_GUARANTEE.GUARANTEE", "business_date", bd_str, known_str),
-                "COL": _resolve_latest_load_id(conn, "RAW_COLLATERAL.PLEDGE", "business_date", bd_str, known_str),
-                "REG": _resolve_latest_load_id(conn, "RAW_REGISTRY.ENTITY_FILING", None, bd_str, known_str),
-            }
-            policy_values, policy_event_ids = policy_in_force(conn, bd_str, known_str)
-
-        lp_max_passes = int(policy_values.get("LP_MAX_PASSES", 50))
-        code_version = get_git_code_version()
-
-        params: dict[str, Any] = {
-            "business_date": bd_str,
-            "known_at": known_str,
-            "run_id": run_id,
-            "baseline_run": run_id,
-            "los_load_id": load_ids.get("LOS", ""),
-            "tsy_load_id": load_ids.get("TSY", ""),
-            "gte_load_id": load_ids.get("GTE", ""),
-            "col_load_id": load_ids.get("COL", ""),
-            "reg_load_id": load_ids.get("REG", ""),
-            **policy_values,
-        }
-
-        # 1. Required stage: 50_asof_links_edges.sql & 51_components_init.sql
-        run_sql_file(conn, sql_path / "50_asof_links_edges.sql", **params)
-        run_sql_file(conn, sql_path / "51_components_init.sql", **params)
-
-        # 2. Required stage: Loop 52_components_pass.sql
-        converged = False
-        lp_passes = 0
-        pass_file = sql_path / "52_components_pass.sql"
-        while lp_passes < lp_max_passes:
-            lp_passes += 1
-            rowcounts = run_sql_file(conn, pass_file, **params)
-            total_mod = sum(rc for rc in rowcounts if rc > 0)
-            if total_mod == 0:
-                converged = True
-                break
-
-        if not converged:
-            finished_at = datetime.now(UTC)
-            conn.execute(
-                """
-                INSERT INTO GOV.REPORT_RUN (
-                    run_id, business_date, known_at, load_ids_json, policy_event_ids_json,
-                    code_version, output_hash, row_count, lp_passes, status, replay_of,
-                    started_at, finished_at
-                ) VALUES (
-                    {run_id}, {business_date}, {known_at}, {load_ids_json}, {policy_event_ids_json},
-                    {code_version}, NULL, 0, {lp_passes}, 'LP_ABORTED', {replay_of},
-                    {started_at}, {finished_at}
-                )
-                """,
-                query_params={
-                    "run_id": run_id,
-                    "business_date": bd_str,
-                    "known_at": known_str,
-                    "load_ids_json": json.dumps(load_ids),
-                    "policy_event_ids_json": json.dumps(policy_event_ids),
-                    "code_version": code_version,
-                    "lp_passes": lp_passes,
-                    "replay_of": replay_of,
-                    "started_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
-                    "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
-                },
-            )
-            return RunResult(
-                run_id=run_id,
-                output_hash=None,
-                status="LP_ABORTED",
-                lp_passes=lp_passes,
-                row_count=0,
-            )
-
-        # 3. Post-component stages: 60, 61, 62, 63
-        for step in ["60_entity_exposure.sql", "61_membership.sql", "62_run_output.sql", "63_reported_baseline.sql"]:
-            run_sql_file(conn, sql_path / step, **params)
-
-        # 4. Hash and row count computation
-        output_hash, row_count = compute_output_hash(conn, run_id)
-        finished_at = datetime.now(UTC)
-
-        # 5. Insert successful run record
-        conn.execute(
-            """
-            INSERT INTO GOV.REPORT_RUN (
-                run_id, business_date, known_at, load_ids_json, policy_event_ids_json,
-                code_version, output_hash, row_count, lp_passes, status, replay_of,
-                started_at, finished_at
-            ) VALUES (
-                {run_id}, {business_date}, {known_at}, {load_ids_json}, {policy_event_ids_json},
-                {code_version}, {output_hash}, {row_count}, {lp_passes}, 'OK', {replay_of},
-                {started_at}, {finished_at}
-            )
-            """,
-            query_params={
-                "run_id": run_id,
-                "business_date": bd_str,
-                "known_at": known_str,
-                "load_ids_json": json.dumps(load_ids),
-                "policy_event_ids_json": json.dumps(policy_event_ids),
-                "code_version": code_version,
-                "output_hash": output_hash,
-                "row_count": row_count,
-                "lp_passes": lp_passes,
-                "replay_of": replay_of,
-                "started_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
-                "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        )
-
-        return RunResult(
-            run_id=run_id,
-            output_hash=output_hash,
-            status="OK",
-            lp_passes=lp_passes,
-            row_count=row_count,
-        )
-
+        # The run rebuilds shared working tables (RESOLVE.W_*_RUN), so it runs as one
+        # transaction: concurrent runs then serialise instead of reading each other's
+        # half-built state, and a failed run leaves no partial GOV.RUN_* rows.
+        for attempt in range(PUBLISH_ATTEMPTS):
+            try:
+                with transaction(conn):
+                    return _publish_once(conn, sql_path, bd_str, known_str, run_id, started_at,
+                                         manifest, replay_of)
+            except Exception as e:
+                if not is_transaction_conflict(e) or attempt == PUBLISH_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.5 * (attempt + 1))
+        raise RuntimeError("unreachable")
     finally:
         if close_conn:
             conn.close()
@@ -298,14 +348,7 @@ def match(
         raise FileNotFoundError(f"SQL directory not found at {sql_path}")
 
     bd_str = business_date.isoformat() if isinstance(business_date, date) else str(business_date)
-    if known_at is None:
-        known_dt = datetime.now(UTC)
-        known_str = known_dt.strftime("%Y-%m-%d %H:%M:%S")
-    elif isinstance(known_at, datetime):
-        known_dt = known_at
-        known_str = known_dt.strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        known_str = str(known_at)
+    known_str = normalize_known_at(known_at)
 
     job_id = f"J-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(2)}"
 
@@ -326,6 +369,7 @@ def match(
         stage_params: dict[str, Any] = {
             "business_date": bd_str,
             "known_at": known_str,
+            "id_token_key": get_id_token_key(),
             **policy_values,
         }
 

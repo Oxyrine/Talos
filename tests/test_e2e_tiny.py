@@ -40,6 +40,21 @@ def test_e2e_tiny_workflow():
     rep_res = replay(baseline.run_id)
     assert rep_res.matches is True
 
+    # Every filed proposal carries valid JSON evidence without identifier hashes
+    import json
+
+    from orchestrator.db import connect
+
+    conn = connect("sys", autocommit=True)
+    try:
+        evidence = [r["evidence_json"] for r in conn.execute("SELECT evidence_json FROM GOV.PROPOSAL").fetchall()]
+    finally:
+        conn.close()
+    assert evidence
+    for doc in evidence:
+        json.loads(doc)
+        assert "id_tokens" not in doc
+
     # Step 5: Metrics
     metrics = compute_metrics(profile="tiny")
     assert "reduction_ratio" in metrics

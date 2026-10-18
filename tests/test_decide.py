@@ -83,6 +83,8 @@ def test_decide_batch_protected_guard():
     # Proposal query returns an ownership proposal with batch_id
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized and "proposal_id" in (query_params or {}):
             return MockStmt(rows=[{
@@ -124,6 +126,8 @@ def test_decide_missing_endpoints_raises():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -163,6 +167,8 @@ def test_decide_reads_real_stake_and_date():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -213,6 +219,8 @@ def test_decide_missing_stake_raises():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -251,6 +259,8 @@ def test_decide_missing_effective_from_raises():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -288,6 +298,8 @@ def test_decide_invalid_json_raises():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -332,6 +344,8 @@ def test_batch_decide_empty_verdicts_rejected():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized and "batch_id" in (query_params or {}):
             return MockStmt(rows=proposals)
@@ -367,6 +381,8 @@ def test_batch_decide_made_up_id_rejected():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized and "batch_id" in (query_params or {}):
             return MockStmt(rows=proposals)
@@ -402,6 +418,8 @@ def test_batch_decide_single_insert_covers_no_update():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized and "batch_id" in (query_params or {}):
             return MockStmt(rows=proposals)
@@ -464,6 +482,8 @@ def test_rule_wrong_proposal_kind():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -502,6 +522,8 @@ def test_rule_single_requires_controller_in_holders():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -540,6 +562,8 @@ def test_rule_missing_stake_raises():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -578,6 +602,8 @@ def test_rule_reads_stake_from_evidence():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -645,6 +671,8 @@ def test_rule_connected_inserts_proposal_via_pipeline():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -694,6 +722,8 @@ def test_decide_already_has_terminal_decision():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -733,6 +763,8 @@ def test_rule_already_has_terminal_ruling():
 
     def mock_exec(query, query_params=None):
         normalized = " ".join(query.strip().split())
+        if "JOIN GOV.PROPOSAL n" in normalized:  # supersede check: nothing newer
+            return MockStmt(rows=[])
         conn.executed.append((normalized, query_params))
         if "FROM GOV.PROPOSAL" in normalized:
             return MockStmt(rows=[{
@@ -759,3 +791,86 @@ def test_rule_already_has_terminal_ruling():
             conn=conn,
         )
     assert "already has a terminal decision" in str(exc_info.value)
+
+
+def _proposal_conn(prop: dict, newer: str | None = None) -> MockConnection:
+    """MockConnection returning `prop` for the proposal lookup and `newer` for the supersede check."""
+    conn = MockConnection()
+
+    def mock_exec(query, query_params=None):
+        normalized = " ".join(query.strip().split())
+        conn.executed.append((normalized, query_params))
+        if "JOIN GOV.PROPOSAL n" in normalized:
+            return MockStmt(rows=[{"proposal_id": newer}] if newer else [])
+        if "FROM GOV.PROPOSAL" in normalized and "proposal_id" in (query_params or {}):
+            return MockStmt(rows=[prop])
+        return MockStmt(rows=[])
+
+    conn.execute = mock_exec
+    return conn
+
+
+RULING_PROPOSAL = {
+    "proposal_id": "P-JV1",
+    "kind": "CONTROL_RULING",
+    "tier": "T3",
+    "subject_key": "JV:E:J1",
+    "rec_key": None,
+    "entity_key": None,
+    "holder_entity_key": None,
+    "held_entity_key": "E:J1",
+    "batch_id": None,
+    "evidence_json": '{"holders": ["E:A", "E:B"], "stakes": {"E:A": 50, "E:B": 50}}',
+    "evidence_hash": "h",
+    "rupee_impact": 0,
+}
+
+LINK_PROPOSAL = {
+    "proposal_id": "P-OLD",
+    "kind": "RECORD_LINK",
+    "tier": "T1",
+    "subject_key": "LOS:1>E:X",
+    "rec_key": "LOS:1",
+    "entity_key": "E:X",
+    "holder_entity_key": None,
+    "held_entity_key": None,
+    "batch_id": None,
+    "evidence_json": "{}",
+    "evidence_hash": "h",
+    "rupee_impact": 0,
+}
+
+
+@pytest.mark.parametrize("decision", ["APPROVE", "REJECT"])
+def test_decide_refuses_control_ruling(decision):
+    """A CONTROL_RULING is only decided through rule(); a REJECT would leave its group UNASSIGNED forever."""
+    conn = _proposal_conn(RULING_PROPOSAL)
+    with pytest.raises(ValueError, match=r"rule\(\)"):
+        decide(proposal_id="P-JV1", decision=decision, reason="Trying to reject a ruling card",
+               reviewer=REVIEWER, business_date="2026-09-30", conn=conn, publish=False)
+    assert not any("INSERT INTO GOV.DECISION_LOG" in q for q, _ in conn.executed)
+
+
+def test_decide_refuses_superseded_proposal():
+    conn = _proposal_conn(LINK_PROPOSAL, newer="P-NEW")
+    with pytest.raises(ProposalConflictError, match="superseded by P-NEW"):
+        decide(proposal_id="P-OLD", decision="APPROVE", reason="Approving the stale card",
+               reviewer=REVIEWER, business_date="2026-09-30", conn=conn, publish=False)
+    assert not any("INSERT INTO GOV.DECISION_LOG" in q for q, _ in conn.executed)
+
+
+def test_rule_refuses_superseded_proposal():
+    conn = _proposal_conn(RULING_PROPOSAL, newer="P-JV2")
+    with pytest.raises(ProposalConflictError, match="superseded by P-JV2"):
+        rule(proposal_id="P-JV1", ruling="NONE", controller=None, reason="Ruling on the stale card",
+             reviewer=REVIEWER, business_date="2026-09-30", conn=conn, publish=False)
+
+
+def test_batch_queries_skip_superseded_members():
+    from orchestrator.decide import batch_sample
+
+    conn = MockConnection()
+    with pytest.raises(ValueError):
+        batch_sample(batch_id="B-REC-1", business_date="2026-09-30", conn=conn)
+    member_query = next(q for q, _ in conn.executed if "WHERE p.batch_id" in q)
+    assert "n.subject_key = p.subject_key AND n.filed_at > p.filed_at" in member_query

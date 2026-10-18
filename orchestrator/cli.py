@@ -128,6 +128,11 @@ def _cmd_init(args: argparse.Namespace) -> int:
     if "TALOS_SESSION_SECRET" not in existing_env or not existing_env["TALOS_SESSION_SECRET"] or existing_env["TALOS_SESSION_SECRET"].startswith("change_me_"):
         existing_env["TALOS_SESSION_SECRET"] = secrets.token_urlsafe(32)
         new_passwords = True
+    key = existing_env.get("TALOS_ID_TOKEN_KEY", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", key):
+        existing_env["TALOS_ID_TOKEN_KEY"] = secrets.token_urlsafe(32)
+        os.environ["TALOS_ID_TOKEN_KEY"] = existing_env["TALOS_ID_TOKEN_KEY"]
+        new_passwords = True
     if "TALOS_JUDGE" not in existing_env:
         existing_env["TALOS_JUDGE"] = "stub"
         new_passwords = True
@@ -146,11 +151,19 @@ def _cmd_init(args: argparse.Namespace) -> int:
         print(f"Could not connect as SYS: {e}", file=sys.stderr)
         return 1
 
-    # Create the five users, or reset their passwords to the ones in .env.
-    # token_urlsafe passwords only hold [A-Za-z0-9_-], so they are safe inside double quotes.
+    # Create the five users, or reset their passwords to the ones in .env. The password goes
+    # into the SQL text (IDENTIFIED BY takes no bind parameter), so only [A-Za-z0-9_-] is accepted.
     for r in roles:
         user = f"TALOS_{r.upper()}"
         pwd = existing_env[f"TALOS_{r.upper()}_PASSWORD"]
+        if not re.fullmatch(r"[A-Za-z0-9_-]{12,}", pwd):
+            print(
+                f"TALOS_{r.upper()}_PASSWORD in .env must be at least 12 characters of A-Z, a-z, 0-9, _ or -; "
+                "delete the line and rerun `talos init` to generate one.",
+                file=sys.stderr,
+            )
+            conn.close()
+            return 1
         exists = conn.execute(
             "SELECT COUNT(*) FROM EXA_ALL_USERS WHERE user_name = {u}", query_params={"u": user}
         ).fetchval()
