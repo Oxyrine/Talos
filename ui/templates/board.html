@@ -1,147 +1,81 @@
 {% extends "base.html" %}
-
-{% block title %}Large Exposures Board{% endblock %}
-
+{% block title %}Connected Exposure{% endblock %}
 {% block content %}
-<div class="page-header">
-  <div>
-    <h1 class="page-title">Large Exposures & Group Exposure Board</h1>
-    <p class="page-subtitle">
-      Business Date: <strong class="text-primary">{{ bd }}</strong> • Eligible Capital Base: <strong>₹420.0 cr</strong> (10% LE Threshold: <strong>₹42.0 cr</strong> | 25% Group Limit: <strong>₹105.0 cr</strong>)
-    </p>
-  </div>
-  <div class="toolbar-group">
-    <a href="/queue" class="btn btn-primary">Open Review Queue →</a>
-  </div>
-</div>
-
-<div id="header-kpi-ribbon" class="kpi-ribbon">
-  <div class="kpi-tile {% if board.kpi.hidden_exposure > 0 %}danger-state{% endif %}">
-    <div class="kpi-label">Hidden Exposure Unmasked</div>
-    <div class="kpi-value tabular-nums">
-      {% if board.kpi.hidden_exposure > 0 %}+{% endif %}{{ board.kpi.hidden_exposure | inr_cr }}
+{% set pending = board.groups | selectattr('limit_exposure', 'none') | list %}
+<div class="page-header board-heading"><div><h1 class="page-title">Connected exposure</h1><p class="page-subtitle">{% if pending %}{{ pending | length }} group perimeter{% if pending | length != 1 %}s{% endif %} awaiting resolution.{% elif board.kpi.breaches_count %}{{ board.kpi.breaches_count }} group{% if board.kpi.breaches_count != 1 %}s{% endif %} above the capital limit.{% else %}All resolved perimeters are within the group limit.{% endif %}</p></div><a href="/queue" class="btn btn-primary">Review connections <span aria-hidden="true">↗</span></a></div>
+<div class="book-scope"><div><span class="scope-live" aria-hidden="true"></span><strong>Connected book</strong><span class="text-muted">{{ board.groups | length }} group perimeters</span></div><span class="business-date">Business date <strong>{{ bd }}</strong></span></div>
+<!-- At 1440px: 228px frame + 8px inset + 48px padding + 1156px content. Content = flexible field + 24px gap + 260px rail. -->
+<div class="board-layout">
+  <section class="footprint-panel" aria-labelledby="footprint-heading">
+    <div class="panel-heading"><div><h2 id="footprint-heading">Capital footprint</h2><p>Top {{ [3, board.groups | length] | min }} perimeters · share of eligible capital.</p></div><span class="plot-key"><i></i>Resolved</span></div>
+    <div class="footprint-grid">
+    {% for g in board.groups[:3] %}
+      {% set cap = g.capital_base %}
+      {% set resolved_pct = g.utilisation_pct if g.limit_exposure is not none and cap else none %}
+      {% set reported_pct = (g.reported_exposure / cap * 100) if cap else none %}
+      {% set plot_pct = resolved_pct if resolved_pct is not none else reported_pct %}
+      <article class="perimeter-plate">
+        <div class="plate-identity"><a href="/lineage/group/{{ g.group_key }}?bd={{ bd }}">{{ g.group_name | replace(' Group', '') }}</a><span>{{ g.member_count }} connected member{% if g.member_count != 1 %}s{% endif %}</span></div>
+        <div class="footprint-chart">
+          <svg class="capital-field {% if resolved_pct is none %}field-pending{% endif %}" viewBox="0 0 178 164" role="img" aria-label="{{ g.group_name }}: {% if resolved_pct is none %}reported{% else %}resolved{% endif %} {% if plot_pct is not none %}{{ plot_pct | percentage }} of eligible capital. Each dot equals one percent; partial dots show fractions. Scale capped at 35 percent.{% else %}capital unavailable.{% endif %}">
+            {% for row in range(7) %}{% for col in range(5) %}
+              {% set index = (6 - row) * 5 + col %}
+              {% set fraction = ([1, [0, (plot_pct or 0) - index] | max] | min) %}
+              <circle cx="{{ 12 + col * 21 }}" cy="{{ 13 + row * 23 }}" r="6" class="field-track"/>
+              {% if fraction > 0 %}
+              <defs><clipPath id="dot-{{ loop.index }}-{{ row }}-{{ g.group_key | replace(':','') }}"><rect x="{{ 6 + col * 21 }}" y="{{ 7 + row * 23 }}" width="{{ fraction * 12 }}" height="12"/></clipPath></defs>
+              <circle cx="{{ 12 + col * 21 }}" cy="{{ 13 + row * 23 }}" r="6" class="field-fill" clip-path="url(#dot-{{ loop.index }}-{{ row }}-{{ g.group_key | replace(':','') }})"/>
+              {% endif %}
+            {% endfor %}{% endfor %}
+            <path d="M111 2h10M111 47h10M111 116h10M111 161h10" class="field-tick"/>
+            <text x="130" y="7">35%</text><text x="130" y="51">25%</text><text x="130" y="120">10%</text><text x="130" y="165">0%</text>
+          </svg>
+          <div class="plate-values"><strong>{% if resolved_pct is not none %}{{ resolved_pct | percentage }}{% else %}<span class="pending-label">Pending</span>{% endif %}</strong><span>{% if g.limit_exposure is not none %}{{ g.limit_exposure | inr_cr }} resolved{% else %}Resolution required{% endif %}</span></div>
+        </div>
+        <div class="plate-baseline"><span>Reported</span><strong>{{ g.reported_exposure | inr_cr }}</strong></div>
+      </article>
+    {% else %}<p class="empty-state">No group exposure data for this business date.</p>{% endfor %}
     </div>
-    <div class="kpi-sub">Across unconsolidated connected perimeters</div>
-  </div>
-
-  <div class="kpi-tile {% if board.kpi.breaches_count > 0 %}danger-state{% endif %}">
-    <div class="kpi-label">Group Limit Breaches (>25%)</div>
-    <div class="kpi-value tabular-nums">{{ board.kpi.breaches_count }}</div>
-    <div class="kpi-sub">RBI Large Exposures Framework (LEF) §5.1</div>
-  </div>
-
-  <div class="kpi-tile">
-    <div class="kpi-label">Large Exposures (≥10%)</div>
-    <div class="kpi-value tabular-nums">{{ board.kpi.large_count }}</div>
-    <div class="kpi-sub">Subject to statutory credit concentration reporting</div>
-  </div>
-
-  <div class="kpi-tile">
-    <div class="kpi-label">Eligible Capital Base</div>
-    <div class="kpi-value tabular-nums">₹420.0 cr</div>
-    <div class="kpi-sub">Tier 1 + Tier 2 capital denominator</div>
-  </div>
-</div>
-
-<div class="table-card">
-  <div class="table-toolbar">
-    <div class="toolbar-group">
-      <span class="text-muted font-bold font-xs">VIEW:</span>
-      <a href="/board?view=talos&sort={{ sort }}&bd={{ bd }}" class="btn btn-secondary btn-sm {% if view == 'talos' %}btn-primary{% endif %}">
-        Talos Resolved Exposure
-      </a>
-      <a href="/board?view=reported&sort={{ sort }}&bd={{ bd }}" class="btn btn-secondary btn-sm {% if view == 'reported' %}btn-primary{% endif %}">
-        Reported (LOS Baseline)
-      </a>
+    <div class="footprint-caption"><span>One dot = 1% of capital · Grey = reported, unresolved</span><span>25% group limit <span aria-hidden="true">/</span> 10% large exposure</span></div>
+  </section>
+  <aside class="position-panel" aria-labelledby="position-heading">
+    <div class="panel-heading"><h2 id="position-heading">Review position</h2><span class="position-mark" aria-hidden="true">⌁</span></div>
+    <div id="header-kpi-ribbon" class="kpi-ribbon">
+      <div class="kpi-tile lead-metric {% if board.kpi.hidden_exposure > 0 %}has-hidden{% endif %}"><div class="kpi-label">Hidden exposure unmasked</div><div class="kpi-value tabular-nums">{% if board.kpi.hidden_exposure > 0 %}+{% endif %}{{ board.kpi.hidden_exposure | inr_cr }}</div><div class="kpi-sub">Resolved less reported exposure</div></div>
+      <div class="position-counts"><div class="kpi-tile"><div class="kpi-label">Limit breaches</div><div class="kpi-value {% if board.kpi.breaches_count %}text-danger{% endif %}">{{ board.kpi.breaches_count }}</div></div><div class="kpi-tile"><div class="kpi-label">Large exposures</div><div class="kpi-value">{{ board.kpi.large_count }}</div></div></div>
     </div>
-
-    <div class="toolbar-group">
-      <span class="text-muted font-bold font-xs">SORT BY:</span>
-      <a href="/board?view={{ view }}&sort=hidden&bd={{ bd }}" class="btn btn-secondary btn-sm {% if sort == 'hidden' %}btn-primary{% endif %}">
-        Hidden Delta
-      </a>
-      <a href="/board?view={{ view }}&sort=util&bd={{ bd }}" class="btn btn-secondary btn-sm {% if sort == 'util' %}btn-primary{% endif %}">
-        Utilisation %
-      </a>
-      <a href="/board?view={{ view }}&sort=exposure&bd={{ bd }}" class="btn btn-secondary btn-sm {% if sort == 'exposure' %}btn-primary{% endif %}">
-        Total Exposure
-      </a>
-    </div>
-  </div>
-
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>Group Perimeter / Head Entity</th>
-        <th>Key</th>
-        <th class="num-cell">Members</th>
-        <th class="num-cell">Reported (LOS)</th>
-        <th class="num-cell">Talos Exposure</th>
-        <th class="num-cell">Hidden Delta</th>
-        <th>Regulatory Utilisation (0–35%)</th>
-        <th class="num-cell">Util %</th>
-        <th>Status</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for g in board.groups %}
-      <tr class="{% if g.is_breach %}breach-row{% endif %}">
-        <td>
-          <strong>
-            <a href="/lineage/group/{{ g.group_key }}">{{ g.group_name }}</a>
-          </strong>
-        </td>
-        <td><code class="id-chip id-chip-missing">{{ g.group_key }}</code></td>
-        <td class="num-cell font-mono">{{ g.member_count }}</td>
-        <td class="num-cell font-mono">{{ g.reported_exposure | inr_cr }}</td>
-        <td class="num-cell font-mono">
-          {% if g.limit_exposure is none %}
-            <span class="text-muted">—</span>
-          {% else %}
-            <strong>{{ g.limit_exposure | inr_cr }}</strong>
-          {% endif %}
-        </td>
-        <td class="num-cell font-mono">
-          {% if g.hidden_exposure > 0 %}
-            <span class="text-danger font-bold">+{{ g.hidden_exposure | inr_cr }}</span>
-          {% else %}
-            <span class="text-muted">₹0.0 cr</span>
-          {% endif %}
-        </td>
-        <td>
-          <div class="gauge-container">
-            <svg viewBox="0 0 35 12" class="gauge-svg" role="meter" aria-valuenow="{{ g.utilisation_pct }}" aria-valuemin="0" aria-valuemax="35">
-              <rect x="0" y="2" width="35" height="8" rx="2" class="gauge-track"/>
-              <rect x="0" y="2" width="{{ g.utilisation_pct | gauge_bar_width }}" height="8" rx="2" class="{{ g.utilisation_pct | gauge_bar_class }}"/>
-              <line x1="10" y1="0" x2="10" y2="12" class="gauge-needle needle-warn"/>
-              <line x1="25" y1="0" x2="25" y2="12" class="gauge-needle needle-danger"/>
-            </svg>
-            <div class="gauge-legend">
-              <span>0%</span>
-              <span>10% LE</span>
-              <span>25% Limit</span>
-            </div>
-          </div>
-        </td>
-        <td class="num-cell font-mono font-bold">
-          {{ g.utilisation_pct | percentage }}
-        </td>
-        <td>
-          {% if g.is_breach %}
-            <span class="badge badge-danger">LIMIT BREACH</span>
-          {% elif g.is_large %}
-            <span class="badge badge-warn">LARGE EXPOSURE</span>
-          {% else %}
-            <span class="badge badge-success">COMPLIANT</span>
-          {% endif %}
-        </td>
-        <td>
-          <a href="/lineage/group/{{ g.group_key }}" class="btn btn-secondary btn-sm">Lineage →</a>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+    <div class="pending-position"><span>Awaiting resolution</span><strong>{{ pending | length }} perimeter{% if pending | length != 1 %}s{% endif %}</strong>{% if pending %}<p>{{ pending[0].group_name }}</p>{% else %}<p>All current perimeters resolved.</p>{% endif %}</div>
+    <div class="capital-reference"><span>Eligible capital</span><strong>{% if board.groups and board.groups[0].capital_base %}{{ board.groups[0].capital_base | inr_cr }}{% else %}—{% endif %}</strong></div>
+    <a href="/lineage/rows?bd={{ bd }}" class="source-link">Inspect source records <span aria-hidden="true">↗</span></a>
+  </aside>
 </div>
+<section class="exposure-section" aria-labelledby="groups-heading">
+  <div class="section-heading"><div><div class="eyebrow">THE WORKING REGISTER</div><h2 id="groups-heading">Exposure register <span class="count-badge">{{ board.groups | length }}</span></h2></div><a href="/lineage/rows?bd={{ bd }}" class="text-link">All source rows <span aria-hidden="true">↗</span></a></div>
+  <div class="table-card board-table-card">
+    <div class="table-toolbar">
+      <div class="comparison-legend"><span class="legend-dot"></span> Reported <span class="text-muted">→</span> Resolved</div>
+      <div class="toolbar-group sort-controls"><span class="control-label">SORT</span>{% for value, label in [('hidden', 'Hidden delta'), ('util', 'Utilisation'), ('exposure', 'Exposure')] %}<a href="/board?sort={{ value }}&bd={{ bd }}&view={{ view }}" class="sort-link {% if sort == value %}is-selected{% endif %}" {% if sort == value %}aria-current="true"{% endif %}>{{ label }}{% if sort == value %}<span aria-hidden="true">↓</span>{% endif %}</a>{% endfor %}</div>
+    </div>
+    <div class="table-scroll" role="region" aria-label="Group exposure table" tabindex="0">
+      <table class="data-table exposure-table">
+        <thead><tr><th>Group / perimeter</th><th class="num-cell">Members</th><th class="num-cell">Reported</th><th class="num-cell">Resolved</th><th class="num-cell">Hidden delta</th><th>Utilisation</th><th>Status</th><th><span class="sr-only">Lineage</span></th></tr></thead>
+        <tbody>
+          {% for g in board.groups %}
+          <tr class="{% if g.is_breach %}breach-row{% endif %}">
+            <td><div class="group-identity"><span class="group-monogram group-color-{{ loop.index0 % 3 }}" aria-hidden="true">{{ '%02d' | format(loop.index) }}</span><div><a href="/lineage/group/{{ g.group_key }}?bd={{ bd }}" class="group-name">{{ g.group_name }}</a><span class="group-key">{{ g.group_key }}</span></div></div></td>
+            <td class="num-cell text-muted">{{ g.member_count }}</td>
+            <td class="num-cell tabular-nums">{{ g.reported_exposure | inr_cr }}</td>
+            <td class="num-cell tabular-nums resolved-value">{{ g.limit_exposure | inr_cr }}</td>
+            <td class="num-cell tabular-nums">{% if g.hidden_exposure > 0 %}<span class="delta-value">+{{ g.hidden_exposure | inr_cr }}</span>{% else %}<span class="text-muted">₹0.0 cr</span>{% endif %}</td>
+            <td><div class="gauge-container">{% if g.limit_exposure is not none %}<div class="gauge-value">{{ g.utilisation_pct | percentage }}<span>of capital</span></div><svg viewBox="0 0 35 12" preserveAspectRatio="none" class="gauge-svg" role="meter" aria-label="{{ g.group_name }} utilisation" aria-valuenow="{{ g.utilisation_pct }}" aria-valuemin="0" aria-valuemax="{{ [35, g.utilisation_pct] | max }}"><rect x="0" y="3" width="35" height="6" rx="1" class="gauge-track"/><rect x="0" y="3" width="{{ g.utilisation_pct | gauge_bar_width }}" height="6" rx="1" class="{{ g.utilisation_pct | gauge_bar_class }}"/><line x1="10" y1="1" x2="10" y2="11" class="gauge-needle needle-warn"/><line x1="25" y1="1" x2="25" y2="11" class="gauge-needle needle-danger"/></svg>{% else %}<span class="unresolved-value">Awaiting resolution</span><div class="pending-track"></div>{% endif %}</div></td>
+            <td>{% if g.limit_exposure is none %}<span class="badge badge-pending">Pending</span>{% elif g.is_breach %}<span class="badge badge-danger">Limit breach</span>{% elif g.is_large %}<span class="badge badge-warn">Large exposure</span>{% else %}<span class="badge badge-success">Compliant</span>{% endif %}</td>
+            <td><a href="/lineage/group/{{ g.group_key }}?bd={{ bd }}" class="row-link" aria-label="View lineage for {{ g.group_name }}">↗</a></td>
+          </tr>
+          {% else %}<tr><td colspan="8" class="empty-state">No group exposures are available for {{ bd }}.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="table-footnote"><span>{{ board.groups | length }} group perimeters <span class="footnote-separator">/</span> Amounts in INR crore</span><span><span class="legend-dot warn-dot"></span> 10% large exposure <span class="footnote-separator">·</span> <span class="legend-dot danger-dot"></span> 25% group limit</span></div>
+  </div>
+</section>
 {% endblock %}
