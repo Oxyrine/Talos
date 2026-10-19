@@ -32,6 +32,7 @@
     </div>
   </aside>
   <div class="workspace">
+    {% if is_mock_mode() %}<div class="app-banner" role="status"><strong>Simulated data.</strong> This console is running in mock mode (TALOS_MOCK=1): figures are fixed sample values, not read from Exasol.</div>{% endif %}
     <main id="main-content" class="main-content" tabindex="-1">{% block content %}{% endblock %}</main>
     <footer class="workspace-footer"><span>Talos <span aria-hidden="true">/</span> Connected credit exposure</span><span>Traceable to the record.</span></footer>
   </div>

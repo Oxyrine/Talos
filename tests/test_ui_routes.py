@@ -283,3 +283,8 @@ def test_batch_submit_accepts_more_than_1000_pairs(approver_client, monkeypatch)
     )
     assert res.status_code == 303, res.text[:200]
     assert len(seen["verdicts"]) == 1015 and all(seen["verdicts"].values())
+
+
+def test_mock_mode_marks_every_page_as_simulated(approver_client):
+    for path in ("/board", "/queue", "/pipeline"):
+        assert "Simulated data." in approver_client.get(path).text, path

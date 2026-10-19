@@ -77,6 +77,7 @@ templates.env.filters["percentage"] = percentage
 templates.env.filters["parse_evidence"] = parse_evidence
 templates.env.filters["gauge_bar_width"] = gauge_bar_width
 templates.env.filters["gauge_bar_class"] = gauge_bar_class
+templates.env.globals["is_mock_mode"] = is_mock_mode  # base.html marks simulated pages
 
 
 # -----------------------------------------------------------------------------
