@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Trail & Cryptographic Replay{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Audit Trail & Cryptographic Replay Log</h1>
+    <p class="page-subtitle">
+      Immutable Exasol Run History • Cryptographically Deterministic Replay Verification
+    </p>
+  </div>
+  <div class="toolbar-group">
+    <a href="/board" class="btn btn-secondary">← Back to Board</a>
+  </div>
+</div>
+
+<div class="table-card">
+  <div class="table-toolbar">
+    <div class="font-bold">Execution Runs & Signed Manifest Hashes</div>
+  </div>
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Run ID</th>
+        <th>Business Date</th>
+        <th>Known At (Bitemporal)</th>
+        <th>Code Version</th>
+        <th>Deterministic Output Hash (SHA-256)</th>
+        <th>Status</th>
+        <th>Cryptographic Verification</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in runs %}
+      <tr>
+        <td><strong class="font-mono">{{ r.run_id }}</strong></td>
+        <td>{{ r.business_date }}</td>
+        <td class="text-xs text-muted font-mono">{{ r.known_at }}</td>
+        <td><code class="font-mono text-xs">{{ r.code_version }}</code></td>
+        <td><code class="id-chip id-chip-missing font-mono text-xs">{{ r.output_hash }}</code></td>
+        <td>
+          <span class="badge {% if r.status == 'PUBLISHED' %}badge-success{% else %}badge-muted{% endif %}">
+            {{ r.status }}
+          </span>
+        </td>
+        <td>
+          <span id="replay-result-{{ r.run_id }}">
+            <button class="btn btn-secondary btn-sm"
+                    hx-post="/audit/replay/{{ r.run_id }}"
+                    hx-target="#replay-result-{{ r.run_id }}"
+                    hx-swap="outerHTML">
+              ⚡ Verify Replay
+            </button>
+          </span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

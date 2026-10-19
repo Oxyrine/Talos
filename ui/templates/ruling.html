@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block title %}Joint Venture Control Ruling{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Joint Venture & Interdependence Control Ruling</h1>
+    <p class="page-subtitle">
+      Statutory Exposure Apportionment under RBI Large Exposures Framework §5.3
+    </p>
+  </div>
+  <div class="toolbar-group">
+    <a href="/queue" class="btn btn-secondary">← Back to Queue</a>
+  </div>
+</div>
+
+<div class="proposal-card mb-6">
+  <div class="proposal-header">
+    <div>
+      <div class="cro-headline">
+        Target Entity: <strong>{{ entity_name }}</strong>
+      </div>
+      <div class="proposal-meta-strip">
+        <span class="badge badge-t2">JV RULING</span>
+        <code class="font-mono">{{ proposal_id }}</code>
+        <span>Gross Exposure: <strong class="text-primary">{{ gross_exposure | inr_cr }}</strong> ({{ gross_exposure | inr_full }})</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="proposal-comparison-grid">
+    <div class="comparison-col">
+      <div class="comparison-col-header">
+        <span>Partner Entity A</span>
+        <span class="badge badge-success">{{ partner_a_pct }}% Equity</span>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Entity Name</div>
+        <div class="comparison-field-value">{{ partner_a }}</div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Group Affiliation</div>
+        <div class="comparison-field-value">Sunrise Group (GRP-017)</div>
+      </div>
+    </div>
+
+    <div class="comparison-col">
+      <div class="comparison-col-header">
+        <span>Partner Entity B</span>
+        <span class="badge badge-warn">{{ partner_b_pct }}% Equity</span>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Entity Name</div>
+        <div class="comparison-field-value">{{ partner_b }}</div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Group Affiliation</div>
+        <div class="comparison-field-value">Apex Holdings Group (GRP-042)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<form method="POST" action="/rulings/{{ proposal_id }}" class="table-card p-6">
+  <h2 class="text-lg font-bold mb-4">Select Statutory Consolidation Formula</h2>
+
+  <div class="grid gap-4 mb-6">
+    <label class="proposal-card cursor-pointer">
+      <div class="flex items-center gap-3">
+        <input type="radio" name="ruling" value="LEAD_CONSOLIDATES" required>
+        <div>
+          <div class="font-bold text-primary">1. Lead Investor Consolidates (100% Allocation)</div>
+          <p class="text-xs text-muted">
+            Controller exercises single management control. 100% of {{ gross_exposure | inr_cr }} is allocated to the designated controlling partner's group perimeter.
+          </p>
+        </div>
+      </div>
+    </label>
+
+    <label class="proposal-card cursor-pointer">
+      <div class="flex items-center gap-3">
+        <input type="radio" name="ruling" value="EQUAL_SPLIT" checked required>
+        <div>
+          <div class="font-bold text-primary">2. Equal Split (50% / 50% Apportionment)</div>
+          <p class="text-xs text-muted">
+            Shared joint control: Apportions {{ (gross_exposure / 2) | inr_cr }} to Sunrise Group and {{ (gross_exposure / 2) | inr_cr }} to Apex Group.
+          </p>
+        </div>
+      </div>
+    </label>
+
+    <label class="proposal-card cursor-pointer">
+      <div class="flex items-center gap-3">
+        <input type="radio" name="ruling" value="PROPORTIONAL" required>
+        <div>
+          <div class="font-bold text-primary">3. Strictly Proportional to Equity Stakes</div>
+          <p class="text-xs text-muted">
+            Apportions exposure strictly based on verified MCA registered shareholding percentages.
+          </p>
+        </div>
+      </div>
+    </label>
+
+    <label class="proposal-card cursor-pointer">
+      <div class="flex items-center gap-3">
+        <input type="radio" name="ruling" value="STANDALONE" required>
+        <div>
+          <div class="font-bold text-primary">4. Standalone (Zero Consolidation)</div>
+          <p class="text-xs text-muted">
+            Neither partner has decisive influence; entity is treated as an independent single borrower under §5.3.4.
+          </p>
+        </div>
+      </div>
+    </label>
+  </div>
+
+  <div class="comparison-field mb-4">
+    <label for="controller" class="comparison-field-label">Designated Controlling Partner (If Lead Consolidates)</label>
+    <select id="controller" name="controller" class="form-select form-full">
+      <option value="{{ partner_a }}">{{ partner_a }} (Sunrise Group)</option>
+      <option value="{{ partner_b }}">{{ partner_b }} (Apex Group)</option>
+    </select>
+  </div>
+
+  <div class="comparison-field mb-6">
+    <label for="ruling-reason" class="comparison-field-label">Auditable Legal Rationale (Immutable Audit Log)</label>
+    <input type="text"
+           id="ruling-reason"
+           name="reason"
+           class="reason-textarea"
+           required
+           value="Joint Venture ruling executed under RBI LEF §5.3 following board representation review.">
+  </div>
+
+  <div class="flex justify-between items-center">
+    <span class="text-muted text-xs">
+      Reviewer: {{ user.username }} ({{ user.role }})
+    </span>
+    <div class="toolbar-group">
+      <a href="/queue" class="btn btn-secondary">Cancel</a>
+      <button type="submit" class="btn btn-primary">
+        Apply Statutory Ruling & Consolidate
+      </button>
+    </div>
+  </div>
+</form>
+{% endblock %}

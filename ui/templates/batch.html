@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}Batch Review — {{ batch.title }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ batch.title }}</h1>
+    <p class="page-subtitle">
+      Batch ID: <code class="font-mono text-primary">{{ batch.batch_id }}</code> •
+      Total in Batch: <strong>{{ batch.total_count }}</strong> •
+      Representative Sample: <strong>{{ batch.sample_count }} pairs</strong>
+    </p>
+  </div>
+  <div class="toolbar-group">
+    <a href="/queue" class="btn btn-secondary">← Back to Queue</a>
+  </div>
+</div>
+
+<div class="batch-banner-card mb-6">
+  <div>
+    <div class="batch-banner-title">Deterministic Sampling Protocol</div>
+    <div class="batch-banner-desc">
+      Reviewing this seed-derived sample validates the batch.
+      <strong>All pairs require an explicit verdict.</strong>
+      Any rejection fails the entire batch to preserve zero-false-merge integrity.
+    </div>
+  </div>
+</div>
+
+<form method="POST" action="/queue/batch/{{ batch.batch_id }}" class="table-card">
+  <input type="hidden" name="seed" value="{{ batch.seed }}">
+  <input type="hidden" name="token" value="{{ batch.token }}">
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Proposal ID</th>
+        <th>Lending Book Entity</th>
+        <th>Source</th>
+        <th>Corporate Registry Entity</th>
+        <th>Explicit Verdict (Radio)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in batch['items'] %}
+      <tr>
+        <td class="font-mono text-muted">{{ loop.index }}</td>
+        <td><code class="id-chip id-chip-missing">{{ item.proposal_id }}</code></td>
+        <td>
+          <strong>{{ item.name_a }}</strong><br>
+          <span class="text-xs text-muted font-mono">PAN: {{ item.pan_a }}</span>
+        </td>
+        <td><span class="badge badge-muted">{{ item.source_a }}</span></td>
+        <td>
+          <strong>{{ item.name_b }}</strong><br>
+          <span class="text-xs text-muted font-mono">PAN: {{ item.pan_b }}</span>
+        </td>
+        <td>
+          <div class="radio-verdict-group">
+            <label class="radio-label text-success font-bold">
+              <input type="radio" name="pair_{{ item.proposal_id }}" value="APPROVE" required>
+              ✓ Approve
+            </label>
+            <label class="radio-label text-danger font-bold">
+              <input type="radio" name="pair_{{ item.proposal_id }}" value="REJECT" required>
+              ✗ Reject
+            </label>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="p-6 bg-surface-elevated border-t border-subtle">
+    <div class="comparison-field mb-4">
+      <label for="batch-reason" class="comparison-field-label">Batch Decision Justification</label>
+      <input type="text"
+             id="batch-reason"
+             name="reason"
+             class="reason-textarea"
+             required
+             value="Batch sample verified: 100% concordance on exact identifiers and corroborated corporate linkages.">
+    </div>
+
+    <div class="flex justify-between items-center">
+      <span class="text-muted text-xs">
+        Token verified: Seed {{ batch.seed }} • User: {{ user.username }} ({{ user.role }})
+      </span>
+      <div class="toolbar-group">
+        <a href="/queue" class="btn btn-secondary">Cancel</a>
+        <button type="submit" class="btn btn-approve">
+          Submit Batch Decision & Sign Audit Trail
+        </button>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

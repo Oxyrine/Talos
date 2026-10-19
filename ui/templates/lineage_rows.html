@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Row-Level Exposure Lineage{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Row-Level Exposure Lineage</h1>
+    <p class="page-subtitle">
+      Full Cryptographic Lineage from Raw Facility Contracts to Consolidated Group Perimeter
+    </p>
+  </div>
+  <div class="toolbar-group">
+    <a href="/lineage/group/{{ group_key }}" class="btn btn-secondary">← Back to Group</a>
+    <a href="/board" class="btn btn-secondary">Board</a>
+  </div>
+</div>
+
+<div class="table-card">
+  <div class="table-toolbar">
+    <div class="toolbar-group">
+      <span class="text-muted font-bold font-xs">FILTER SOURCE:</span>
+      <a href="/lineage/rows?group_key={{ group_key }}&source=&product={{ product }}" class="btn btn-secondary btn-sm {% if source == '' %}btn-primary{% endif %}">All</a>
+      <a href="/lineage/rows?group_key={{ group_key }}&source=LOS&product={{ product }}" class="btn btn-secondary btn-sm {% if source == 'LOS' %}btn-primary{% endif %}">LOS (Loans)</a>
+      <a href="/lineage/rows?group_key={{ group_key }}&source=TSY&product={{ product }}" class="btn btn-secondary btn-sm {% if source == 'TSY' %}btn-primary{% endif %}">TSY (Treasury)</a>
+      <a href="/lineage/rows?group_key={{ group_key }}&source=GTE&product={{ product }}" class="btn btn-secondary btn-sm {% if source == 'GTE' %}btn-primary{% endif %}">GTE (Guarantees)</a>
+      <a href="/lineage/rows?group_key={{ group_key }}&source=COL&product={{ product }}" class="btn btn-secondary btn-sm {% if source == 'COL' %}btn-primary{% endif %}">COL (Collateral)</a>
+    </div>
+  </div>
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Entity Name</th>
+        <th>Source Book</th>
+        <th>Facility / Product</th>
+        <th class="num-cell">Gross Amount</th>
+        <th class="num-cell">CCF</th>
+        <th class="num-cell">Net Exposure</th>
+        <th>Proposal / Decision</th>
+        <th>Reviewer</th>
+        <th>Match Tier</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><strong>{{ r.entity_name }}</strong></td>
+        <td>
+          <span class="badge badge-muted">{{ r.source_system }}</span>
+          <span class="font-mono text-xs text-muted">{{ r.source_row_id }}</span>
+        </td>
+        <td>
+          {{ r.product }}<br>
+          <span class="text-muted text-xs">{{ r.component }}</span>
+        </td>
+        <td class="num-cell font-mono">{{ r.gross_amount | inr_full }}</td>
+        <td class="num-cell font-mono">{{ r.ccf }}</td>
+        <td class="num-cell font-mono font-bold">{{ r.exposure_amount | inr_full }}</td>
+        <td>
+          <code class="id-chip id-chip-missing">{{ r.proposal_id }}</code><br>
+          <span class="text-xs text-muted font-mono">{{ r.decision_id }}</span>
+        </td>
+        <td>
+          <span class="text-xs">{{ r.reviewer }}</span><br>
+          <span class="text-xs text-muted">{{ r.decided_at }}</span>
+        </td>
+        <td>
+          <span class="badge badge-{{ r.tier | lower }}">{{ r.tier }}</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

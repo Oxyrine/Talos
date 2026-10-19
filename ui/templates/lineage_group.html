@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Group Lineage — {{ data.group_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ data.group_name }}</h1>
+    <p class="page-subtitle">
+      Group Key: <code class="font-mono text-primary">{{ data.group_key }}</code> • Run: <strong>{{ data.run_id }}</strong>
+      {% if data.is_latest %}<span class="badge badge-success">LATEST RUN</span>{% else %}<span class="badge badge-warn">HISTORICAL SNAPSHOT</span>{% endif %}
+    </p>
+  </div>
+  <div class="toolbar-group">
+    <a href="/lineage/rows?group_key={{ data.group_key }}" class="btn btn-primary">View Row-Level Lineage →</a>
+    <a href="/board" class="btn btn-secondary">← Back to Board</a>
+  </div>
+</div>
+
+{% if not data.is_latest %}
+<div class="batch-banner-card mb-6">
+  <div>
+    <div class="batch-banner-title">Historical Run View</div>
+    <div class="batch-banner-desc">
+      Viewing frozen membership snapshot for historical Run <code>{{ data.run_id }}</code>.
+      Active graph traversal is suppressed for historical immutable runs.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if data.is_latest and data.tree_nodes %}
+<div class="proposal-card mb-6">
+  <div class="proposal-header">
+    <div class="cro-headline">Recursive Graph Ownership Traversal (Exasol CONNECT BY)</div>
+  </div>
+  <div class="tree-container">
+    {% for node in data.tree_nodes %}
+    <div class="tree-node {% if node.is_head %}is-head{% endif %}">
+      {% if not node.is_head %}
+        <span class="text-muted text-xs">└─ [{{ node.stake_pct }}]</span>
+      {% endif %}
+      <span class="font-bold text-primary">{{ node.entity_name }}</span>
+      {% if node.is_head %}
+        <span class="badge badge-t0">ULTIMATE PARENT</span>
+      {% endif %}
+      {% if node.closes_cycle %}
+        <span class="cycle-badge">⟳ CYCLE PRUNED (§5.2)</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="table-card">
+  <div class="table-toolbar">
+    <div class="font-bold">Consolidated Group Members & Book Exposures</div>
+    <div class="text-muted text-xs">{{ data.members | length }} Member Entities</div>
+  </div>
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Entity Key</th>
+        <th>Legal Entity Name</th>
+        <th>Contributing Books</th>
+        <th class="num-cell">Total Exposure</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in data.members %}
+      <tr>
+        <td><code class="id-chip id-chip-missing">{{ m.entity_key }}</code></td>
+        <td><strong>{{ m.entity_name }}</strong></td>
+        <td><span class="badge badge-muted">{{ m.books }}</span></td>
+        <td class="num-cell font-mono font-bold">{{ m.exposure | inr_cr }}</td>
+        <td>
+          <a href="/lineage/entity/{{ m.entity_key }}" class="btn btn-secondary btn-sm">Entity Details →</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

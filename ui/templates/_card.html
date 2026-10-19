@@ -1,0 +1,142 @@
+{% set ev = p.evidence_json | parse_evidence %}
+<div id="card-{{ p.proposal_id }}" class="proposal-card">
+  <div class="proposal-header">
+    <div>
+      <div class="cro-headline">
+        {% if p.crosses_limit %}
+          <span class="impact-breach">⚠ REGULATORY BREACH WARNING:</span> Approving merges into
+          <strong>{{ p.group_name }}</strong>, pushing group exposure to <strong>{{ p.group_after_pct | percentage }}</strong> (Limit: 25.0%).
+        {% elif p.crosses_le %}
+          <span class="impact-warn">⚡ LARGE EXPOSURE THRESHOLD:</span> Pushes <strong>{{ p.group_name }}</strong> to
+          <strong>{{ p.group_after_pct | percentage }}</strong> (≥10.0% statutory threshold).
+        {% else %}
+          Resolution Proposal: <strong>{{ p.group_name }}</strong> exposure impact:
+          <strong>+{{ p.rupee_impact | inr_cr }}</strong> ({{ p.group_before_pct | percentage }} → {{ p.group_after_pct | percentage }}).
+        {% endif %}
+      </div>
+      <div class="proposal-meta-strip">
+        <span class="badge badge-{{ p.tier | lower }}">{{ p.tier }}</span>
+        <span class="font-mono">{{ p.proposal_id }}</span>
+        <span>Kind: <strong>{{ p.kind }}</strong></span>
+        <span>Rule: <em>{{ p.tier_reason }}</em></span>
+        <span>Impact: <strong class="text-primary">{{ p.rupee_impact | inr_cr }}</strong></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="proposal-comparison-grid">
+    <!-- Left: Lending Book Record -->
+    <div class="comparison-col">
+      <div class="comparison-col-header">
+        <span>Source Book Record</span>
+        <span class="badge badge-muted">{{ ev.book.source | default('LENDING BOOK') }}</span>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Borrower / Facility Name</div>
+        <div class="comparison-field-value">{{ ev.book.raw_name | default(p.subject_key) }}</div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Reported PAN</div>
+        <div class="comparison-field-value font-mono">
+          {% if ev.book.pan %}
+            <span class="id-chip id-chip-match">{{ ev.book.pan }}</span>
+          {% else %}
+            <span class="id-chip id-chip-missing">MISSING PAN</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Book Exposure & Facility</div>
+        <div class="comparison-field-value tabular-nums">
+          {{ p.rupee_impact | inr_full }} ({{ ev.book.product | default('Term Facility') }})
+        </div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Reported Address / Pincode</div>
+        <div class="comparison-field-value text-muted">
+          {{ ev.book.address | default('Mumbai, MH 400001') }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: MCA Corporate Registry Record -->
+    <div class="comparison-col">
+      <div class="comparison-col-header">
+        <span>MCA Corporate Registry</span>
+        <span class="badge badge-muted">MCA21 / ROC</span>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Registered Legal Name</div>
+        <div class="comparison-field-value">{{ ev.registry.entity_name | default(p.group_name) }}</div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Registry PAN / CIN</div>
+        <div class="comparison-field-value font-mono">
+          {% if ev.registry.pan %}
+            <span class="id-chip id-chip-match">{{ ev.registry.pan }}</span>
+          {% endif %}
+          {% if ev.registry.cin %}
+            <span class="id-chip id-chip-missing">{{ ev.registry.cin }}</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Entity Status / Incorporation</div>
+        <div class="comparison-field-value text-success">
+          {{ ev.registry.status | default('ACTIVE') }} • Inc. {{ ev.registry.incorporation_date | default('2014') }}
+        </div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Registered Office</div>
+        <div class="comparison-field-value text-muted">
+          {{ ev.registry.address | default('Nariman Point, Mumbai, Maharashtra 400021') }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if p.kind == 'CONTROL_RULING' %}
+  <div class="proposal-action-bar">
+    <div class="reason-input-group">
+      <span class="text-warn font-bold">Joint Venture / Equal Partnership detected.</span>
+      <p class="text-muted text-xs">Statutory ruling required under LEF §5.3 to apportion exposure between partners.</p>
+    </div>
+    <div class="card-actions">
+      <a href="/rulings/{{ p.proposal_id }}" class="btn btn-primary">Open JV Ruling Console →</a>
+    </div>
+  </div>
+  {% else %}
+  <form hx-post="/proposals/{{ p.proposal_id }}/decision"
+        hx-target="#card-{{ p.proposal_id }}"
+        hx-swap="outerHTML"
+        class="proposal-action-bar">
+
+    <div class="reason-input-group">
+      <label for="reason-{{ p.proposal_id }}">Auditable Decision Rationale (Immutable Audit Log)</label>
+      <input type="text"
+             id="reason-{{ p.proposal_id }}"
+             name="reason"
+             class="reason-textarea"
+             required
+             placeholder="State justification for regulatory audit trail..."
+             value="{% if p.tier == 'T3' %}ID-Name mismatch detected: Decoy entity rejected to prevent false perimeter merge.{% elif p.kind == 'OWNERSHIP' %}MCA holding confirmed: Sunrise holds 100% equity in HoldCo.{% else %}Identity verified via fuzzy match and address corroboration.{% endif %}">
+    </div>
+
+    <div class="card-actions">
+      <span class="htmx-indicator" id="indicator-{{ p.proposal_id }}">
+        <span class="spinner"></span>
+      </span>
+
+      <button type="submit" name="decision" value="APPROVE" class="btn btn-approve"
+              title="Confirm link and consolidate group exposure">
+        ✓ Approve Link
+      </button>
+
+      <button type="submit" name="decision" value="REJECT" class="btn btn-reject"
+              title="Reject link and write immutable DO_NOT_LINK barrier">
+        ✗ Reject Link
+      </button>
+    </div>
+  </form>
+  {% endif %}
+</div>

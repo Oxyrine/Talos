@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
+  <title>{% block title %}Exposure Board{% endblock %} — TALOS Regulatory Console</title>
+  <link rel="stylesheet" href="/static/talos.css">
+  <script src="/static/htmx-2.0.4.min.js"></script>
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  {% if is_mock %}
+  <div class="app-banner" role="alert">
+    MOCK MODE ACTIVE (TALOS_MOCK=1) — Exasol Connection Bypassed • Pure In-Memory Deterministic Simulator
+  </div>
+  {% endif %}
+
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand-section">
+        <a href="/board" class="brand-logo">
+          <span>TALOS</span>
+          <span class="brand-tag">Exasol Track 01</span>
+        </a>
+        <nav class="nav-links" aria-label="Main Navigation">
+          <a href="/board" class="nav-link {% if active_nav == 'board' %}active{% endif %}">Exposure Board</a>
+          <a href="/queue" class="nav-link {% if active_nav == 'queue' %}active{% endif %}">Review Queue</a>
+          <a href="/lineage/rows" class="nav-link {% if active_nav == 'lineage' %}active{% endif %}">Lineage</a>
+          <a href="/pipeline" class="nav-link {% if active_nav == 'pipeline' %}active{% endif %}">Pipeline</a>
+          <a href="/audit" class="nav-link {% if active_nav == 'audit' %}active{% endif %}">Audit Trail</a>
+        </nav>
+      </div>
+
+      <div class="user-status">
+        {% if user %}
+        <div class="reviewer-pill" title="Signed in reviewer identity">
+          <span class="reviewer-role">{{ user.role }}</span>
+          <span class="font-mono">{{ user.username }}</span>
+        </div>
+        <form method="POST" action="/signout">
+          <button type="submit" class="btn-signout">Sign Out</button>
+        </form>
+        {% else %}
+        <a href="/signin" class="btn btn-secondary btn-sm">Sign In</a>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <main id="main-content" class="main-content">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

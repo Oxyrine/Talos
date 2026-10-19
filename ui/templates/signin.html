@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Sign In{% endblock %}
+
+{% block content %}
+<div class="auth-wrapper">
+  <div class="proposal-card auth-box">
+    <div class="proposal-header">
+      <div>
+        <h1 class="page-title">TALOS Console</h1>
+        <p class="page-subtitle">Deterministic Regulatory & Large Exposure Reviewer Access</p>
+      </div>
+    </div>
+
+    {% if error %}
+    <div class="app-banner" role="alert">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    {% if is_mock %}
+    <div class="batch-banner-card">
+      <div>
+        <div class="batch-banner-title">Deterministic Simulator Active</div>
+        <div class="batch-banner-desc">Default APPROVER: <code>reviewer@talos.internal</code> / <code>talos</code></div>
+      </div>
+    </div>
+    {% endif %}
+
+    <form method="POST" action="/signin" class="auth-form">
+      <div class="comparison-field">
+        <label for="username" class="comparison-field-label">Reviewer Email / Identity</label>
+        <input type="text" id="username" name="username" class="form-input form-full" required autofocus
+               placeholder="reviewer@talos.internal" value="{% if is_mock %}reviewer@talos.internal{% endif %}">
+      </div>
+
+      <div class="comparison-field">
+        <label for="password" class="comparison-field-label">Password</label>
+        <input type="password" id="password" name="password" class="form-input form-full" required
+               placeholder="••••••••" value="{% if is_mock %}talos{% endif %}">
+      </div>
+
+      <div class="auth-actions">
+        <button type="submit" class="btn btn-primary form-full">
+          Authenticate Reviewer Session
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Pipeline Diagnostics{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Pipeline Diagnostics & Match Funnel</h1>
+    <p class="page-subtitle">
+      Latest Match Execution Diagnostic Telemetry • Job: <strong class="text-primary">{{ data.job_id }}</strong>
+    </p>
+  </div>
+  <div class="toolbar-group">
+    <a href="/board" class="btn btn-secondary">← Back to Board</a>
+  </div>
+</div>
+
+<div class="kpi-ribbon mb-6">
+  <div class="kpi-tile">
+    <div class="kpi-label">Total Book Records</div>
+    <div class="kpi-value tabular-nums">{{ data.summary.total_book_records }}</div>
+    <div class="kpi-sub">Across 4 lending books</div>
+  </div>
+
+  <div class="kpi-tile">
+    <div class="kpi-label">Registry Universe</div>
+    <div class="kpi-value tabular-nums">{{ data.summary.total_reg_entities }}</div>
+    <div class="kpi-sub">MCA21 verified legal entities</div>
+  </div>
+
+  <div class="kpi-tile">
+    <div class="kpi-label">Settled Purely in SQL</div>
+    <div class="kpi-value tabular-nums">{{ data.summary.settled_in_sql_pct | percentage }}</div>
+    <div class="kpi-sub">Zero external API dependencies</div>
+  </div>
+
+  <div class="kpi-tile">
+    <div class="kpi-label">Candidate Reduction</div>
+    <div class="kpi-value tabular-nums">{{ data.summary.reduction_ratio | percentage(2) }}</div>
+    <div class="kpi-sub">Search space eliminated</div>
+  </div>
+</div>
+
+<div class="grid grid-cols-2 gap-6 mb-6">
+  <!-- Timing Breakdown -->
+  <div class="table-card">
+    <div class="table-toolbar">
+      <div class="font-bold">Execution Timing by Stage</div>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Pipeline Stage</th>
+          <th class="num-cell">Rows Affected</th>
+          <th class="num-cell">Duration</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in data.timings %}
+        <tr>
+          <td><strong>{{ t.stage }}</strong></td>
+          <td class="num-cell font-mono">{{ t.rows }}</td>
+          <td class="num-cell font-mono font-bold">{{ "%.3f"|format(t.seconds) }}s</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Candidate Generation Paths -->
+  <div class="table-card">
+    <div class="table-toolbar">
+      <div class="font-bold">Candidate Generation Index Paths</div>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Blocking Index Path</th>
+          <th class="num-cell">Candidates Generated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in data.paths %}
+        <tr>
+          <td><code class="font-mono text-primary">{{ p.via_path }}</code></td>
+          <td class="num-cell font-mono font-bold">{{ p.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tier Distribution -->
+<div class="table-card">
+  <div class="table-toolbar">
+    <div class="font-bold">Resolved Tier Distribution</div>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Tier</th>
+        <th>Description</th>
+        <th class="num-cell">Match Count</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for td in data.tiers %}
+      <tr>
+        <td><span class="badge badge-{{ td.tier | lower }}">{{ td.tier }}</span></td>
+        <td class="text-muted">
+          {% if td.tier == 'T0' %}Exact PAN / CIN match with legal name corroboration
+          {% elif td.tier == 'T1' %}High-confidence token Jaccard similarity & address match
+          {% elif td.tier == 'T2' %}Discarded low score (< policy threshold)
+          {% elif td.tier == 'T3' %}ID-Name conflict rejected to prevent false merge
+          {% else %}Candidate match tier{% endif %}
+        </td>
+        <td class="num-cell font-mono font-bold">{{ td.count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Entity Details — {{ entity_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ entity_name }}</h1>
+    <p class="page-subtitle">
+      Entity Key: <code class="font-mono text-primary">{{ entity_key }}</code> • Affiliated: <strong>{{ group_name }}</strong>
+    </p>
+  </div>
+  <div class="toolbar-group">
+    <a href="/lineage/rows" class="btn btn-primary">View Contributing Facility Rows →</a>
+    <a href="/board" class="btn btn-secondary">← Back to Board</a>
+  </div>
+</div>
+
+<div class="proposal-card mb-6">
+  <div class="proposal-header">
+    <div class="cro-headline">Corporate Master Record (MCA21 Corroborated)</div>
+  </div>
+
+  <div class="proposal-comparison-grid">
+    <div class="comparison-col">
+      <div class="comparison-col-header">
+        <span>Statutory Identifiers</span>
+        <span class="badge badge-success">VERIFIED</span>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Corporate Identification Number (CIN)</div>
+        <div class="comparison-field-value font-mono">{{ cin }}</div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Permanent Account Number (PAN)</div>
+        <div class="comparison-field-value font-mono">
+          <span class="id-chip id-chip-match">{{ pan }}</span>
+        </div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Incorporation Date</div>
+        <div class="comparison-field-value">14-Mar-2010 (16 years active)</div>
+      </div>
+    </div>
+
+    <div class="comparison-col">
+      <div class="comparison-col-header">
+        <span>Registered Office & ROC</span>
+        <span class="badge badge-muted">ROC Mumbai</span>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Registered Office Address</div>
+        <div class="comparison-field-value text-muted">
+          Maker Chambers IV, Nariman Point, Mumbai, Maharashtra 400021
+        </div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Listing Status</div>
+        <div class="comparison-field-value">Unlisted Public Company</div>
+      </div>
+      <div class="comparison-field">
+        <div class="comparison-field-label">Paid-Up Capital</div>
+        <div class="comparison-field-value tabular-nums">₹50,00,00,000.00</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

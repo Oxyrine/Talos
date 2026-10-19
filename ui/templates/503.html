@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}503 — Exasol Database Offline{% endblock %}
+
+{% block content %}
+<div class="auth-wrapper">
+  <div class="proposal-card auth-box">
+    <div class="proposal-header">
+      <div>
+        <h1 class="page-title text-danger">503 Service Unavailable</h1>
+        <p class="page-subtitle">Exasol Database Connection Failed</p>
+      </div>
+    </div>
+
+    <div class="app-banner mb-6" role="alert">
+      Live Exasol database at port 8563 is unreachable. TALOS_MOCK is currently DISABLED.
+    </div>
+
+    <div class="p-4 bg-canvas border border-subtle rounded mb-6">
+      <div class="text-xs text-muted uppercase font-bold mb-2">Error Details</div>
+      <code class="font-mono text-xs text-danger break-words">{{ error_detail }}</code>
+    </div>
+
+    <div class="mb-6">
+      <div class="font-bold text-sm mb-2">Remediation Steps:</div>
+      <ul class="text-xs text-secondary pl-4 list-disc space-y-1">
+        <li><strong>For Local Interactive Demos:</strong> Set <code>TALOS_MOCK=1</code> in your environment before launching the server.</li>
+        <li><strong>For Live Database Runs:</strong> Ensure Docker is running and execute <code>docker start exasol-talos</code> or verify connectivity to <code>localhost:8563</code>.</li>
+      </ul>
+    </div>
+
+    <div class="auth-actions">
+      <a href="/healthz" class="btn btn-secondary">Check Healthz Endpoint</a>
+      <a href="/signin" class="btn btn-primary">Retry Authentication</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
