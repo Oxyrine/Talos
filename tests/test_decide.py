@@ -874,3 +874,38 @@ def test_batch_queries_skip_superseded_members():
         batch_sample(batch_id="B-REC-1", business_date="2026-09-30", conn=conn)
     member_query = next(q for q, _ in conn.executed if "WHERE p.batch_id" in q)
     assert "n.subject_key = p.subject_key AND n.filed_at > p.filed_at" in member_query
+
+
+def test_ownership_batch_writes_events_in_one_multi_row_insert():
+    """3,500 corroborated edges used to take one INSERT each (over a minute in the demo)."""
+    conn = MockConnection()
+    proposals = [
+        {"proposal_id": f"P-O{i:02d}", "kind": "OWNERSHIP", "subject_key": f"CONTROL:E:H{i}>E:S{i}",
+         "rec_key": None, "entity_key": None, "holder_entity_key": f"E:H{i}", "held_entity_key": f"E:S{i}",
+         "evidence_json": json.dumps({"stake_pct": 50 + i, "effective_from": "2025-01-01"}), "evidence_hash": f"h{i}"}
+        for i in range(3)
+    ]
+
+    def mock_exec(query, query_params=None):
+        normalized = " ".join(query.strip().split())
+        conn.executed.append((normalized, query_params))
+        if "JOIN GOV.PROPOSAL n" in normalized:
+            return MockStmt(rows=[])
+        if "FROM GOV.PROPOSAL" in normalized and "batch_id" in (query_params or {}):
+            return MockStmt(rows=proposals)
+        return MockStmt(rows=[])
+
+    conn.execute = mock_exec
+    import random
+
+    sampled = set(random.Random(7).sample([p["proposal_id"] for p in proposals], 3))
+    with patch("orchestrator.decide.policy_in_force") as mock_pif:
+        mock_pif.return_value = ({"OWN_SAMPLE_PCT": 100, "OWN_SAMPLE_MIN": 3}, {})
+        batch_decide(batch_id="B-OWN-FAST", seed=7, verdicts={pid: True for pid in sampled},
+                     reason="Sampled ownership edges checked", reviewer=REVIEWER,
+                     business_date="2026-09-30", conn=conn, publish=False)
+
+    inserts = [q for q, _ in conn.executed if "INSERT INTO GRAPH.OWNERSHIP_EVENT" in q]
+    assert len(inserts) == 1
+    assert inserts[0].count("'CONTROL', 'MAJORITY', 'CONFIRMED'") == 3
+    assert "50, 'ASSERT', 'h0', '2025-01-01'" in inserts[0] and "52, 'ASSERT', 'h2'" in inserts[0]

@@ -1,9 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Connected Exposure{% endblock %}
 {% block content %}
-{% set pending = board.groups | selectattr('limit_exposure', 'none') | list %}
-<div class="page-header board-heading"><div><h1 class="page-title">Connected exposure</h1><p class="page-subtitle">{% if pending %}{{ pending | length }} group perimeter{% if pending | length != 1 %}s{% endif %} awaiting resolution.{% elif board.kpi.breaches_count %}{{ board.kpi.breaches_count }} group{% if board.kpi.breaches_count != 1 %}s{% endif %} above the capital limit.{% else %}All resolved perimeters are within the group limit.{% endif %}</p></div><a href="/queue" class="btn btn-primary">Review connections <span aria-hidden="true">↗</span></a></div>
-<div class="book-scope"><div><span class="scope-live" aria-hidden="true"></span><strong>Connected book</strong><span class="text-muted">{{ board.groups | length }} group perimeters</span></div><span class="business-date">Business date <strong>{{ bd }}</strong></span></div>
+{% set pending_count = board.pending_count | default(board.groups | selectattr('limit_exposure', 'none') | list | length) %}
+{% set first_pending = board.first_pending_name | default((board.groups | selectattr('limit_exposure', 'none') | map(attribute='group_name') | first) or none) %}
+{% set group_count = board.group_count | default(board.groups | length) %}
+<div class="page-header board-heading"><div><h1 class="page-title">Connected exposure</h1><p class="page-subtitle">{% if pending_count %}{{ pending_count }} group perimeter{% if pending_count != 1 %}s{% endif %} awaiting resolution.{% elif board.kpi.breaches_count %}{{ board.kpi.breaches_count }} group{% if board.kpi.breaches_count != 1 %}s{% endif %} above the capital limit.{% else %}All resolved perimeters are within the group limit.{% endif %}</p></div><a href="/queue" class="btn btn-primary">Review connections <span aria-hidden="true">↗</span></a></div>
+<div class="book-scope"><div><span class="scope-live" aria-hidden="true"></span><strong>Connected book</strong><span class="text-muted">{{ group_count }} group perimeters</span></div><span class="business-date">Business date <strong>{{ bd }}</strong></span></div>
 <!-- At 1440px: 228px frame + 8px inset + 48px padding + 1156px content. Content = flexible field + 24px gap + 260px rail. -->
 <div class="board-layout">
   <section class="footprint-panel" aria-labelledby="footprint-heading">
@@ -41,13 +43,13 @@
   <aside class="position-panel" aria-labelledby="position-heading">
     <div class="panel-heading"><h2 id="position-heading">Review position</h2><span class="position-mark" aria-hidden="true">⌁</span></div>
     {% with kpi = board.kpi %}{% include "_kpi_ribbon.html" %}{% endwith %}
-    <div class="pending-position"><span>Awaiting resolution</span><strong>{{ pending | length }} perimeter{% if pending | length != 1 %}s{% endif %}</strong>{% if pending %}<p>{{ pending[0].group_name }}</p>{% else %}<p>All current perimeters resolved.</p>{% endif %}</div>
+    <div class="pending-position"><span>Awaiting resolution</span><strong>{{ pending_count }} perimeter{% if pending_count != 1 %}s{% endif %}</strong>{% if pending_count %}<p>{{ first_pending }}</p>{% else %}<p>All current perimeters resolved.</p>{% endif %}</div>
     <div class="capital-reference"><span>Eligible capital</span><strong>{% if board.groups and board.groups[0].capital_base %}{{ board.groups[0].capital_base | inr_cr }}{% else %}—{% endif %}</strong></div>
     <a href="/lineage/rows?bd={{ bd }}" class="source-link">Inspect source records <span aria-hidden="true">↗</span></a>
   </aside>
 </div>
 <section class="exposure-section" aria-labelledby="groups-heading">
-  <div class="section-heading"><div><div class="eyebrow">THE WORKING REGISTER</div><h2 id="groups-heading">Exposure register <span class="count-badge">{{ board.groups | length }}</span></h2></div><a href="/lineage/rows?bd={{ bd }}" class="text-link">All source rows <span aria-hidden="true">↗</span></a></div>
+  <div class="section-heading"><div><div class="eyebrow">THE WORKING REGISTER</div><h2 id="groups-heading">Exposure register <span class="count-badge">{{ group_count }}</span></h2></div><a href="/lineage/rows?bd={{ bd }}" class="text-link">All source rows <span aria-hidden="true">↗</span></a></div>
   <div class="table-card board-table-card">
     <div class="table-toolbar">
       <div class="comparison-legend"><span class="legend-dot"></span> Reported <span class="text-muted">→</span> Resolved</div>
@@ -72,7 +74,7 @@
         </tbody>
       </table>
     </div>
-    <div class="table-footnote"><span>{{ board.groups | length }} group perimeters <span class="footnote-separator">/</span> Amounts in INR crore</span><span><span class="legend-dot warn-dot"></span> 10% large exposure <span class="footnote-separator">·</span> <span class="legend-dot danger-dot"></span> 25% group limit</span></div>
+    <div class="table-footnote"><span>{% if group_count > board.groups | length %}Top {{ board.groups | length }} of {% endif %}{{ group_count }} group perimeters{% if board.unlinked_records %} <span class="footnote-separator">/</span> {{ board.unlinked_records }} unlinked records not listed{% endif %} <span class="footnote-separator">/</span> Amounts in INR crore</span><span><span class="legend-dot warn-dot"></span> 10% large exposure <span class="footnote-separator">·</span> <span class="legend-dot danger-dot"></span> 25% group limit</span></div>
   </div>
 </section>
 {% endblock %}

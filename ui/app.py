@@ -305,6 +305,9 @@ async def batch_review_page(
     return templates.TemplateResponse(request=request, name="batch.html", context=ctx)
 
 
+BATCH_FORM_MAX_FIELDS = 50_000
+
+
 @app.post("/queue/batch/{batch_id}")
 async def submit_batch_decision(
     batch_id: str,
@@ -312,7 +315,9 @@ async def submit_batch_decision(
     user: SessionUser = Depends(require_approver),
 ):
     verify_origin(request)
-    form_data = await request.form()
+    # One field per sampled pair: a 5% sample of a large exact-ID batch is over 1,000 pairs
+    # (DEV-36), past Starlette's default limit of 1,000 form fields.
+    form_data = await request.form(max_fields=BATCH_FORM_MAX_FIELDS)
 
     token = str(form_data.get("token", ""))
     reason = str(form_data.get("reason", "Batch sample approved")).strip()

@@ -252,6 +252,12 @@ def test_db_unavailable_when_mock_disabled(monkeypatch):
     """Verify HTTP 503 is returned when TALOS_MOCK is unset and DB is unavailable (no silent fallback)."""
     monkeypatch.delenv("TALOS_MOCK", raising=False)
     monkeypatch.setenv("TALOS_SESSION_SECRET", "x" * 40)
+
+    # Simulate an unreachable database even when a local Nano is running.
+    def refuse(*args, **kwargs):
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr("orchestrator.db.connect", refuse)
     client = TestClient(app, follow_redirects=False)
 
     user = SessionUser(username="reviewer@talos.internal", role="APPROVER")
@@ -262,3 +268,18 @@ def test_db_unavailable_when_mock_disabled(monkeypatch):
     assert res.status_code == 503
     assert "503 Service Unavailable" in res.text
     assert "Exasol database unavailable (TALOS_MOCK is not enabled)" in res.text
+
+
+def test_batch_submit_accepts_more_than_1000_pairs(approver_client, monkeypatch):
+    """A 5% sample of a 20,000-link exact-ID batch is ~1,015 pairs: past Starlette's 1,000-field default."""
+    import ui.app as app_module
+
+    seen = {}
+    monkeypatch.setattr(app_module, "execute_batch", lambda **kw: seen.update(kw))
+    form = {f"pair_P-{i:05d}": "APPROVE" for i in range(1015)}
+    form.update(token="t", seed="1", reason="Sampled pairs checked")
+    res = approver_client.post(
+        "/queue/batch/B-REC-1", data=form, headers={"Origin": "http://testserver"}, follow_redirects=False
+    )
+    assert res.status_code == 303, res.text[:200]
+    assert len(seen["verdicts"]) == 1015 and all(seen["verdicts"].values())
