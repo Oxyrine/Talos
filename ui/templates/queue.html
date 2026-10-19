@@ -1,98 +1,24 @@
 {% extends "base.html" %}
-
 {% block title %}Review Queue{% endblock %}
-
 {% block content %}
-<div class="page-header">
-  <div>
-    <h1 class="page-title">Review Queue & Human Governance</h1>
-    <p class="page-subtitle">
-      Deterministic Tier 1/3 Resolution Proposals • Ordered by Regulatory Impact
-    </p>
-  </div>
-  <div class="toolbar-group">
-    <a href="/board" class="btn btn-secondary">← Back to Board</a>
-  </div>
-</div>
-
+<div class="page-header"><div><div class="eyebrow"><span class="section-index">02</span> DECISION WORKSPACE</div><h1 class="page-title">Review queue</h1><p class="page-subtitle">Review the evidence. Resolve the connection. Proposals are ordered by their exposure impact.</p></div><a href="/board" class="btn btn-secondary">Back to board ↗</a></div>
 <div class="queue-container">
-  <!-- Active Batch Review Banners -->
-  {% for b in queue.batches %}
-  <div class="batch-banner-card">
-    <div>
-      <div class="batch-banner-title">{{ b.title }}</div>
-      <div class="batch-banner-desc">
-        {{ b.total_count }} unreviewed edges • Representative sample: <strong>{{ b.sample_count }} pairs</strong> (Seed-verified HMAC protocol)
-      </div>
+  {% if queue.batches %}
+  <div class="batch-grid">
+    {% for b in queue.batches %}
+    <div class="batch-banner-card">
+      <div><div class="eyebrow">Batch review <span class="eyebrow-line"></span> {{ '%02d' | format(loop.index) }}</div><div class="batch-banner-title">{{ b.title }}</div><div class="batch-count">{{ '{:,}'.format(b.total_count) }}<span>pending connections</span></div></div>
+      <div class="batch-bottom"><span class="text-xs text-muted">{{ b.sample_count }} pairs in sample</span><a href="/queue/batch/{{ b.batch_id }}" class="text-link">Review sample <span aria-hidden="true">↗</span></a></div>
     </div>
-    <div>
-      <a href="/queue/batch/{{ b.batch_id }}" class="btn btn-primary">
-        Review Sample Batch ({{ b.sample_count }}) →
-      </a>
-    </div>
-  </div>
-  {% endfor %}
-
-  <!-- Filter Bar -->
-  <div class="table-card">
-    <div class="table-toolbar">
-      <div class="toolbar-group">
-        <span class="text-muted font-bold font-xs">FILTER TIER:</span>
-        <a href="/queue?tier=&kind={{ kind }}" class="btn btn-secondary btn-sm {% if tier == '' %}btn-primary{% endif %}">All</a>
-        <a href="/queue?tier=T0&kind={{ kind }}" class="btn btn-secondary btn-sm {% if tier == 'T0' %}btn-primary{% endif %}">T0 (Exact)</a>
-        <a href="/queue?tier=T1&kind={{ kind }}" class="btn btn-secondary btn-sm {% if tier == 'T1' %}btn-primary{% endif %}">T1 (Fuzzy)</a>
-        <a href="/queue?tier=T2&kind={{ kind }}" class="btn btn-secondary btn-sm {% if tier == 'T2' %}btn-primary{% endif %}">T2 (Low Score)</a>
-        <a href="/queue?tier=T3&kind={{ kind }}" class="btn btn-secondary btn-sm {% if tier == 'T3' %}btn-primary{% endif %}">T3 (Conflict)</a>
-      </div>
-
-      <div class="toolbar-group">
-        <span class="text-muted font-bold font-xs">KIND:</span>
-        <a href="/queue?tier={{ tier }}&kind=" class="btn btn-secondary btn-sm {% if kind == '' %}btn-primary{% endif %}">All</a>
-        <a href="/queue?tier={{ tier }}&kind=RECORD_LINK" class="btn btn-secondary btn-sm {% if kind == 'RECORD_LINK' %}btn-primary{% endif %}">Record Link</a>
-        <a href="/queue?tier={{ tier }}&kind=OWNERSHIP" class="btn btn-secondary btn-sm {% if kind == 'OWNERSHIP' %}btn-primary{% endif %}">Ownership</a>
-        <a href="/queue?tier={{ tier }}&kind=CONTROL_RULING" class="btn btn-secondary btn-sm {% if kind == 'CONTROL_RULING' %}btn-primary{% endif %}">JV Ruling</a>
-      </div>
-    </div>
-  </div>
-
-  <!-- Proposal Cards -->
-  {% if queue.proposals %}
-    {% for p in queue.proposals %}
-      {% include "_card.html" %}
     {% endfor %}
-
-    <!-- Server-Side Pagination Bar -->
-    <div class="table-card">
-      <div class="table-toolbar">
-        <div class="text-muted text-xs">
-          Showing Page <strong>{{ queue.pagination.page }}</strong> of <strong>{{ queue.pagination.total_pages }}</strong>
-          ({{ queue.pagination.total_items }} total actionable proposals)
-        </div>
-        <div class="toolbar-group">
-          {% if queue.pagination.has_prev %}
-          <a href="/queue?page={{ queue.pagination.page - 1 }}&per_page={{ queue.pagination.per_page }}&tier={{ tier }}&kind={{ kind }}" class="btn btn-secondary btn-sm">
-            ← Previous
-          </a>
-          {% else %}
-          <button class="btn btn-secondary btn-sm" disabled>← Previous</button>
-          {% endif %}
-
-          {% if queue.pagination.has_next %}
-          <a href="/queue?page={{ queue.pagination.page + 1 }}&per_page={{ queue.pagination.per_page }}&tier={{ tier }}&kind={{ kind }}" class="btn btn-secondary btn-sm">
-            Next →
-          </a>
-          {% else %}
-          <button class="btn btn-secondary btn-sm" disabled>Next →</button>
-          {% endif %}
-        </div>
-      </div>
-    </div>
-  {% else %}
-    <div class="table-card">
-      <div class="card-body text-center p-8">
-        <p class="text-muted">No pending proposals found matching the selected filter criteria.</p>
-      </div>
-    </div>
+  </div>
   {% endif %}
+  <div class="section-heading mb-0"><div><div class="eyebrow">Individual decisions</div><h2>Resolution proposals <span class="count-badge">{{ queue.pagination.total_items }}</span></h2></div></div>
+  <div class="table-card"><div class="table-toolbar">
+    <div class="toolbar-group"><span class="control-label">TIER</span>{% for value, label in [('', 'All'), ('T0', 'T0 · Exact'), ('T1', 'T1 · Fuzzy'), ('T2', 'T2 · Low score'), ('T3', 'T3 · Conflict')] %}<a href="/queue?tier={{ value }}&kind={{ kind }}" class="sort-link {% if tier == value %}is-selected{% endif %}" {% if tier == value %}aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}</div>
+    <div class="toolbar-group"><span class="control-label">KIND</span>{% for value, label in [('', 'All'), ('RECORD_LINK', 'Record link'), ('OWNERSHIP', 'Ownership'), ('CONTROL_RULING', 'JV ruling')] %}<a href="/queue?tier={{ tier }}&kind={{ value }}" class="sort-link {% if kind == value %}is-selected{% endif %}" {% if kind == value %}aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}</div>
+  </div></div>
+  {% for p in queue.proposals %}{% include "_card.html" %}{% else %}<div class="table-card empty-state">No pending proposals match these filters.</div>{% endfor %}
+  {% if queue.proposals %}<div class="table-toolbar"><span class="text-muted text-xs">Page {{ queue.pagination.page }} of {{ queue.pagination.total_pages }} <span class="footnote-separator">/</span> {{ queue.pagination.total_items }} actionable proposals</span><div class="toolbar-group">{% if queue.pagination.has_prev %}<a href="/queue?page={{ queue.pagination.page - 1 }}&per_page={{ queue.pagination.per_page }}&tier={{ tier }}&kind={{ kind }}" class="btn btn-secondary btn-sm">← Previous</a>{% else %}<button class="btn btn-secondary btn-sm" disabled>← Previous</button>{% endif %}{% if queue.pagination.has_next %}<a href="/queue?page={{ queue.pagination.page + 1 }}&per_page={{ queue.pagination.per_page }}&tier={{ tier }}&kind={{ kind }}" class="btn btn-secondary btn-sm">Next →</a>{% else %}<button class="btn btn-secondary btn-sm" disabled>Next →</button>{% endif %}</div></div>{% endif %}
 </div>
 {% endblock %}

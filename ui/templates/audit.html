@@ -5,6 +5,7 @@
 {% block content %}
 <div class="page-header">
   <div>
+    <div class="eyebrow">05 / THE PERMANENT RECORD</div>
     <h1 class="page-title">Audit Trail & Cryptographic Replay Log</h1>
     <p class="page-subtitle">
       Immutable Exasol Run History • Cryptographically Deterministic Replay Verification
@@ -20,7 +21,7 @@
     <div class="font-bold">Execution Runs & Signed Manifest Hashes</div>
   </div>
 
-  <table class="data-table">
+  <div class="table-scroll" role="region" aria-label="Scrollable data table" tabindex="0"><table class="data-table">
     <thead>
       <tr>
         <th>Run ID</th>
@@ -58,6 +59,6 @@
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </div>
 {% endblock %}

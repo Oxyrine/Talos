@@ -5,6 +5,7 @@
 {% block content %}
 <div class="page-header">
   <div>
+    <div class="eyebrow">03 / CONNECTED ENTITIES</div>
     <h1 class="page-title">{{ data.group_name }}</h1>
     <p class="page-subtitle">
       Group Key: <code class="font-mono text-primary">{{ data.group_key }}</code> • Run: <strong>{{ data.run_id }}</strong>
@@ -59,7 +60,7 @@
     <div class="text-muted text-xs">{{ data.members | length }} Member Entities</div>
   </div>
 
-  <table class="data-table">
+  <div class="table-scroll" role="region" aria-label="Scrollable data table" tabindex="0"><table class="data-table">
     <thead>
       <tr>
         <th>Entity Key</th>
@@ -82,6 +83,6 @@
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </div>
 {% endblock %}
