@@ -1,13 +1,11 @@
 """tests/test_ui_routes.py: Comprehensive route smoke tests, 5-stage hero state machine tests, and 503 checks."""
 
-import os
-from decimal import Decimal
 import pytest
 from starlette.testclient import TestClient
 
 from ui.app import app
 from ui.auth import COOKIE_NAME, SessionUser, create_session_token
-from ui.mock_data import reset_mock_state, get_mock_state
+from ui.mock_data import get_mock_state, reset_mock_state
 
 
 @pytest.fixture
@@ -98,7 +96,7 @@ def test_5_stage_hero_walkthrough(approver_client):
     # Submit batch approval
     state = get_mock_state()
     seed = state.active_batch_seeds["B-REC-2026101101"]
-    from ui.mock_data import generate_batch_token
+    from ui.batch_token import generate_batch_token
     sample_ids = [f"P-REC-SMP-{i:03d}" for i in range(1, 97)]
     token = generate_batch_token("reviewer@talos.internal", "B-REC-2026101101", seed, sample_ids)
 
@@ -150,7 +148,7 @@ def test_5_stage_hero_walkthrough(approver_client):
     assert "₹58.2 cr" in res.text
     assert "13.9%" in res.text
     assert "+₹18.2 cr" in res.text
-    assert "LARGE EXPOSURE" in res.text
+    assert "Large exposure" in res.text
 
     # --- Step 3: Individual T1 Cards Approved + T3 Rejected ---
     # Approve Guarantee (+₹17.4 cr) -> moves to Step 3 (₹75.6 cr)
@@ -190,20 +188,20 @@ def test_5_stage_hero_walkthrough(approver_client):
     assert "₹112.0 cr" in res.text
     assert "26.7%" in res.text
     assert "+₹72.0 cr" in res.text
-    assert "LIMIT BREACH" in res.text
+    assert "Limit breach" in res.text
 
 
 def test_jv_ruling_routes(approver_client):
     """Verify JV ruling screen and submission."""
     res = approver_client.get("/rulings/P-RULING-JV-01")
     assert res.status_code == 200
-    assert "Joint Venture & Interdependence Control Ruling" in res.text
-    assert "EQUAL_SPLIT" in res.text
+    assert "Joint Venture Control Ruling" in res.text
+    assert "JOINT" in res.text
 
     res = approver_client.post(
         "/rulings/P-RULING-JV-01",
         data={
-            "ruling": "EQUAL_SPLIT",
+            "ruling": "JOINT",
             "reason": "50-50 equity joint control verified under LEF §5.3",
         },
         headers={"Origin": "http://testserver"},
@@ -223,7 +221,7 @@ def test_lineage_and_audit_routes(approver_client):
     # Lineage entity
     res = approver_client.get("/lineage/entity/ENT-017-001")
     assert res.status_code == 200
-    assert "Corporate Master Record" in res.text
+    assert "Exposure component" in res.text
 
     # Lineage rows
     res = approver_client.get("/lineage/rows?group_key=GRP-017")
@@ -253,6 +251,7 @@ def test_lineage_and_audit_routes(approver_client):
 def test_db_unavailable_when_mock_disabled(monkeypatch):
     """Verify HTTP 503 is returned when TALOS_MOCK is unset and DB is unavailable (no silent fallback)."""
     monkeypatch.delenv("TALOS_MOCK", raising=False)
+    monkeypatch.setenv("TALOS_SESSION_SECRET", "x" * 40)
     client = TestClient(app, follow_redirects=False)
 
     user = SessionUser(username="reviewer@talos.internal", role="APPROVER")

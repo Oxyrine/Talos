@@ -40,10 +40,7 @@
   </section>
   <aside class="position-panel" aria-labelledby="position-heading">
     <div class="panel-heading"><h2 id="position-heading">Review position</h2><span class="position-mark" aria-hidden="true">⌁</span></div>
-    <div id="header-kpi-ribbon" class="kpi-ribbon">
-      <div class="kpi-tile lead-metric {% if board.kpi.hidden_exposure > 0 %}has-hidden{% endif %}"><div class="kpi-label">Hidden exposure unmasked</div><div class="kpi-value tabular-nums">{% if board.kpi.hidden_exposure > 0 %}+{% endif %}{{ board.kpi.hidden_exposure | inr_cr }}</div><div class="kpi-sub">Resolved less reported exposure</div></div>
-      <div class="position-counts"><div class="kpi-tile"><div class="kpi-label">Limit breaches</div><div class="kpi-value {% if board.kpi.breaches_count %}text-danger{% endif %}">{{ board.kpi.breaches_count }}</div></div><div class="kpi-tile"><div class="kpi-label">Large exposures</div><div class="kpi-value">{{ board.kpi.large_count }}</div></div></div>
-    </div>
+    {% with kpi = board.kpi %}{% include "_kpi_ribbon.html" %}{% endwith %}
     <div class="pending-position"><span>Awaiting resolution</span><strong>{{ pending | length }} perimeter{% if pending | length != 1 %}s{% endif %}</strong>{% if pending %}<p>{{ pending[0].group_name }}</p>{% else %}<p>All current perimeters resolved.</p>{% endif %}</div>
     <div class="capital-reference"><span>Eligible capital</span><strong>{% if board.groups and board.groups[0].capital_base %}{{ board.groups[0].capital_base | inr_cr }}{% else %}—{% endif %}</strong></div>
     <a href="/lineage/rows?bd={{ bd }}" class="source-link">Inspect source records <span aria-hidden="true">↗</span></a>

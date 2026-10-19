@@ -1,21 +1,20 @@
 """tests/test_ui_security.py: Rigorous security, CSP compliance, and anti-lockout tests."""
 
-import os
 import re
 import time
-from decimal import Decimal
+
 import pytest
 from starlette.testclient import TestClient
 
 from ui.app import app
 from ui.auth import (
-    COOKIE_NAME,
     _FAILED_ATTEMPTS,
+    COOKIE_NAME,
     SessionUser,
-    create_session_token,
     clear_failed_attempts,
+    create_session_token,
 )
-from ui.mock_data import generate_batch_token, verify_batch_token, reset_mock_state
+from ui.mock_data import generate_batch_token, reset_mock_state, verify_batch_token
 
 
 @pytest.fixture(autouse=True)
@@ -169,3 +168,45 @@ def test_approver_role_guard(analyst_client):
     )
     assert res.status_code == 403
     assert "Forbidden: This action requires the APPROVER role." in res.text
+
+
+def test_secret_required_outside_mock_mode(monkeypatch):
+    """No hardcoded fallback: an unset or placeholder secret must fail, not sign cookies."""
+    from ui.auth import get_secret
+
+    monkeypatch.delenv("TALOS_MOCK", raising=False)
+    monkeypatch.delenv("TALOS_SESSION_SECRET", raising=False)
+    with pytest.raises(RuntimeError):
+        get_secret()
+    monkeypatch.setenv("TALOS_SESSION_SECRET", "change_me_session_secret_at_least_32_chars")
+    with pytest.raises(RuntimeError):
+        get_secret()
+    monkeypatch.setenv("TALOS_SESSION_SECRET", "a-real-secret-" + "x" * 20)
+    assert get_secret("session") != get_secret("batch")
+
+
+def test_batch_token_expiry_and_forged_signature(monkeypatch):
+    """An expired token and one with a swapped seed are both rejected."""
+    user, batch, pids = "reviewer@talos.internal", "B-REC-001", ["P-1", "P-2"]
+    token = generate_batch_token(user, batch, 7, pids)
+
+    forged = token.replace(":7:", ":8:", 1)
+    with pytest.raises(ValueError, match="signature"):
+        verify_batch_token(forged, user, batch, pids)
+
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + 901)
+    with pytest.raises(ValueError, match="expired"):
+        verify_batch_token(token, user, batch, pids)
+
+
+def test_decision_response_escapes_reviewer_text(approver_client):
+    """The rationale is reflected in the decided card; markup in it must come back escaped."""
+    res = approver_client.post(
+        "/proposals/P-HERO-001/decision",
+        data={"decision": "APPROVE", "reason": '<img src=x onerror=alert(1)> "q"'},
+        headers={"Origin": "http://testserver"},
+    )
+    assert res.status_code == 200
+    assert "<img src=x" not in res.text
+    assert "&lt;img src=x" in res.text

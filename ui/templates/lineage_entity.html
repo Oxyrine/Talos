@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Entity Details — {{ entity_name }}{% endblock %}
+{% block title %}Entity — {{ entity_name }}{% endblock %}
 
 {% block content %}
 <div class="page-header">
@@ -8,62 +8,27 @@
     <div class="eyebrow">03 / ENTITY RECORD</div>
     <h1 class="page-title">{{ entity_name }}</h1>
     <p class="page-subtitle">
-      Entity Key: <code class="font-mono text-primary">{{ entity_key }}</code> • Affiliated: <strong>{{ group_name }}</strong>
+      Entity key <code class="font-mono text-primary">{{ entity_key }}</code>
+      {% if cin %}• CIN <code class="font-mono">{{ cin }}</code>{% endif %}
+      • Group: <a href="/lineage/group/{{ group_key }}"><strong>{{ group_name }}</strong></a>
     </p>
   </div>
   <div class="toolbar-group">
-    <a href="/lineage/rows" class="btn btn-primary">View Contributing Facility Rows →</a>
+    <a href="/lineage/rows?group_key={{ group_key }}" class="btn btn-primary">View contributing rows →</a>
     <a href="/board" class="btn btn-secondary">← Back to Board</a>
   </div>
 </div>
 
-<div class="proposal-card mb-6">
-  <div class="proposal-header">
-    <div class="cro-headline">Corporate Master Record (MCA21 Corroborated)</div>
-  </div>
-
-  <div class="proposal-comparison-grid">
-    <div class="comparison-col">
-      <div class="comparison-col-header">
-        <span>Statutory Identifiers</span>
-        <span class="badge badge-success">VERIFIED</span>
-      </div>
-      <div class="comparison-field">
-        <div class="comparison-field-label">Corporate Identification Number (CIN)</div>
-        <div class="comparison-field-value font-mono">{{ cin }}</div>
-      </div>
-      <div class="comparison-field">
-        <div class="comparison-field-label">Permanent Account Number (PAN)</div>
-        <div class="comparison-field-value font-mono">
-          <span class="id-chip id-chip-match">{{ pan }}</span>
-        </div>
-      </div>
-      <div class="comparison-field">
-        <div class="comparison-field-label">Incorporation Date</div>
-        <div class="comparison-field-value">14-Mar-2010 (16 years active)</div>
-      </div>
-    </div>
-
-    <div class="comparison-col">
-      <div class="comparison-col-header">
-        <span>Registered Office & ROC</span>
-        <span class="badge badge-muted">ROC Mumbai</span>
-      </div>
-      <div class="comparison-field">
-        <div class="comparison-field-label">Registered Office Address</div>
-        <div class="comparison-field-value text-muted">
-          Maker Chambers IV, Nariman Point, Mumbai, Maharashtra 400021
-        </div>
-      </div>
-      <div class="comparison-field">
-        <div class="comparison-field-label">Listing Status</div>
-        <div class="comparison-field-value">Unlisted Public Company</div>
-      </div>
-      <div class="comparison-field">
-        <div class="comparison-field-label">Paid-Up Capital</div>
-        <div class="comparison-field-value tabular-nums">₹50,00,00,000.00</div>
-      </div>
-    </div>
-  </div>
+<div class="table-card">
+  <table class="data-table">
+    <thead><tr><th>Exposure component</th><th class="text-right">Amount</th></tr></thead>
+    <tbody>
+      {% for label, amount in components %}
+      <tr><td>{{ label }}</td><td class="text-right tabular-nums">{{ amount | inr_full }}</td></tr>
+      {% endfor %}
+      <tr><td><strong>Total (book exposure)</strong></td><td class="text-right tabular-nums"><strong>{{ exposure | inr_full }}</strong> · {{ exposure | inr_cr }}</td></tr>
+    </tbody>
+  </table>
+  {% if published_at %}<p class="text-muted text-xs p-4">Entity first published {{ published_at }}.</p>{% endif %}
 </div>
 {% endblock %}

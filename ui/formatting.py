@@ -7,7 +7,7 @@ and ROUND_HALF_UP rounding rules.
 from __future__ import annotations
 
 import json
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 
@@ -104,7 +104,48 @@ def parse_evidence(val: Any) -> dict[str, Any]:
         res["book"] = {}
     if "registry" not in res or not isinstance(res["registry"], dict):
         res["registry"] = {}
+    _normalise_pipeline_evidence(res)
     return res
+
+
+_ID_WORDS = {"agree": "matches registry", "conflict": "conflicts with registry"}
+
+
+def _normalise_pipeline_evidence(ev: dict[str, Any]) -> None:
+    """Map the flat evidence_json written by sql/70 and sql/71 onto the book/registry shape
+    the card templates read. Evidence that already has the nested shape is left alone."""
+    book = ev["book"]
+    if "name_a_raw" in ev and not book:  # RECORD_LINK
+        ids = ev.get("id_status") or {}
+        status = ids.get("PAN") if ids.get("PAN") in _ID_WORDS else (ids.get("CIN") if ids.get("CIN") in _ID_WORDS else None)
+        word = _ID_WORDS.get(status or "")
+        ev["book"] = {
+            "source": ev.get("source_a"),
+            "raw_name": ev.get("name_a_raw"),
+            "pan": word,
+            "address": ", ".join(p for p in (ev.get("city_a"), ev.get("state_a"), ev.get("pincode_a")) if p),
+        }
+        ev["registry"] = {
+            "entity_name": ev.get("name_b_raw"),
+            "pan": word,
+            "address": ", ".join(p for p in (ev.get("city_b"), ev.get("state_b"), ev.get("pincode_b")) if p),
+        }
+    elif ev.get("kind") == "OWNERSHIP" and not book:
+        strip = lambda k: str(k or "").removeprefix("E:")  # noqa: E731
+        ev["book"] = {
+            "holder_name": ev.get("holder_name"),
+            "holder_cin": strip(ev.get("holder_entity_key")),
+            "stake_pct": f"{ev['stake_pct']}%" if ev.get("stake_pct") is not None else None,
+            "held_name": ev.get("held_name"),
+            "held_cin": strip(ev.get("held_entity_key")),
+        }
+        ev["registry"] = {"filing_date": ev.get("filed_on")}
+    elif ev.get("kind") == "CONTROL_RULING" and "holder_a" not in ev:
+        stakes = ev.get("stakes") or {}
+        shown = [f"{k.removeprefix('E:')} ({stakes[k]}%)" if k in stakes else k.removeprefix("E:") for k in ev.get("holders") or []]
+        ev["held_entity"] = ev.get("held_name")
+        ev["holder_a"] = shown[0] if shown else None
+        ev["holder_b"] = ", ".join(shown[1:]) or None
 
 
 def gauge_bar_width(util: Any) -> float:

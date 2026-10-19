@@ -11,16 +11,15 @@ Simulates the exact 5-stage hero journey for Sunrise Industries (Group 17) to th
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import math
 import secrets
-import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any
+
+from ui.batch_token import generate_batch_token, verify_batch_token  # noqa: F401  (re-exported)
 
 CAPITAL_BASE = Decimal("4200000000.00")  # ₹420.00 cr
 GROUP_LIMIT_AMT = Decimal("1050000000.00")  # ₹105.00 cr (25%)
@@ -46,45 +45,6 @@ def reset_mock_state() -> None:
     global _STATE
     _STATE = MockState()
 
-
-# -------------------------------------------------------------------------
-# HMAC Seed Token Security
-# -------------------------------------------------------------------------
-_TOKEN_SECRET = b"talos_batch_seed_token_secret_key_32"
-
-
-def generate_batch_token(user_id: str, batch_id: str, seed: int, proposal_ids: list[str]) -> str:
-    """Issue HMAC token encoding user_id, batch_id, seed, proposal_hash, and 15m expiry."""
-    expires_at = int(time.time()) + 900
-    sorted_hash = hashlib.sha256(",".join(sorted(proposal_ids)).encode("utf-8")).hexdigest()
-    payload = f"{user_id}:{batch_id}:{seed}:{sorted_hash}:{expires_at}"
-    sig = hmac.new(_TOKEN_SECRET, payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"{payload}:{sig}"
-
-
-def verify_batch_token(token: str, user_id: str, batch_id: str, proposal_ids: list[str]) -> int:
-    """Verify HMAC token and return seed. Raise ValueError on tamper or expiry."""
-    try:
-        u, b, seed_str, phash, exp_str, sig = token.split(":")
-    except ValueError:
-        raise ValueError("Malformed batch verification token.")
-
-    if u != user_id or b != batch_id:
-        raise ValueError("Batch token user or batch mismatch.")
-
-    if int(exp_str) < time.time():
-        raise ValueError("Batch verification token has expired (15-minute window).")
-
-    expected_phash = hashlib.sha256(",".join(sorted(proposal_ids)).encode("utf-8")).hexdigest()
-    if phash != expected_phash:
-        raise ValueError("Batch proposals have changed since token issuance.")
-
-    payload = f"{u}:{b}:{seed_str}:{phash}:{exp_str}"
-    expected_sig = hmac.new(_TOKEN_SECRET, payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected_sig, sig):
-        raise ValueError("Batch verification signature mismatch.")
-
-    return int(seed_str)
 
 
 # -------------------------------------------------------------------------
@@ -700,3 +660,37 @@ def get_mock_audit_data() -> list[dict[str, Any]]:
             "replay_of": None,
         },
     ]
+
+
+# -------------------------------------------------------------------------
+# JV ruling and entity detail
+# -------------------------------------------------------------------------
+def get_mock_ruling_data(proposal_id: str) -> dict[str, Any]:
+    return {
+        "proposal_id": proposal_id,
+        "entity_name": "Konark Deccan Infra JV Private Limited",
+        "gross_exposure": Decimal("54200000.00"),
+        "partners": [
+            {"entity_key": "E:U27100MH2008PLC000101", "name": "Konark Steels Limited", "pct": 50, "group_name": "Konark Group"},
+            {"entity_key": "E:U45200KA2011PLC000202", "name": "Deccan Infra Limited", "pct": 50, "group_name": "Deccan Group"},
+        ],
+    }
+
+
+def get_mock_lineage_entity_data(entity_key: str) -> dict[str, Any]:
+    return {
+        "entity_key": entity_key,
+        "entity_name": "Sunrise Industries Limited" if "017" in entity_key else entity_key,
+        "cin": entity_key.removeprefix("E:") if entity_key.startswith("E:") else None,
+        "group_key": "GRP-017",
+        "group_name": "Sunrise Group",
+        "exposure": Decimal("312000000.00"),
+        "published_at": None,
+        "components": [
+            ("Funded", Decimal("212000000.00")),
+            ("Undrawn (CCF)", Decimal("20000000.00")),
+            ("Treasury holdings", Decimal("50000000.00")),
+            ("Financial guarantees", Decimal("30000000.00")),
+            ("Performance guarantees", Decimal("0.00")),
+        ],
+    }

@@ -1,0 +1,10 @@
+<div id="card-{{ proposal_id }}" class="proposal-card">
+  <div class="proposal-header">
+    <div>
+      <span class="badge badge-{{ 'success' if decision == 'APPROVE' else 'danger' }}">{{ '✓ LINK APPROVED' if decision == 'APPROVE' else '✗ LINK REJECTED' }}</span>
+      <span class="text-muted font-mono ml-2">{{ proposal_id }}</span>
+      <p class="text-muted text-xs mt-2">Decided by <strong>{{ user.username }}</strong> ({{ user.role }}) • Rationale: <em>"{{ reason }}"</em></p>
+    </div>
+  </div>
+</div>
+{% with oob = true %}{% include "_kpi_ribbon.html" %}{% endwith %}

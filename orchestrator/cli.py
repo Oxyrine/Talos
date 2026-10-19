@@ -429,6 +429,8 @@ def _cmd_add_reviewer(args: argparse.Namespace) -> int:
 def _cmd_serve(args: argparse.Namespace) -> int:
     """Start web console."""
     import uvicorn
+
+    load_env_file()  # TALOS_SESSION_SECRET must be in os.environ before the app signs a cookie
     host = args.host
     port = args.port
     print(f"Starting Talos Web Console on http://{host}:{port}...")

@@ -6,10 +6,8 @@
 <div class="page-header">
   <div>
     <div class="eyebrow">02 / A MATTER OF CONTROL</div>
-    <h1 class="page-title">Joint Venture & Interdependence Control Ruling</h1>
-    <p class="page-subtitle">
-      Statutory Exposure Apportionment under RBI Large Exposures Framework §5.3
-    </p>
+    <h1 class="page-title">Joint Venture Control Ruling</h1>
+    <p class="page-subtitle">Who controls this entity decides whose group limit its exposure counts against.</p>
   </div>
   <div class="toolbar-group">
     <a href="/queue" class="btn btn-secondary">← Back to Queue</a>
@@ -19,130 +17,106 @@
 <div class="proposal-card mb-6">
   <div class="proposal-header">
     <div>
-      <div class="cro-headline">
-        Target Entity: <strong>{{ entity_name }}</strong>
-      </div>
+      <div class="cro-headline">Target Entity: <strong>{{ entity_name }}</strong></div>
       <div class="proposal-meta-strip">
         <span class="badge badge-t2">JV RULING</span>
         <code class="font-mono">{{ proposal_id }}</code>
-        <span>Gross Exposure: <strong class="text-primary">{{ gross_exposure | inr_cr }}</strong> ({{ gross_exposure | inr_full }})</span>
+        <span>Exposure at stake: <strong class="text-primary">{{ gross_exposure | inr_cr }}</strong> ({{ gross_exposure | inr_full }})</span>
       </div>
     </div>
   </div>
 
   <div class="proposal-comparison-grid">
+    {% for p in partners %}
     <div class="comparison-col">
       <div class="comparison-col-header">
-        <span>Partner Entity A</span>
-        <span class="badge badge-success">{{ partner_a_pct }}% Equity</span>
+        <span>Holder {{ loop.index }}</span>
+        <span class="badge badge-warn">{% if p.pct is not none %}{{ p.pct }}% stake{% else %}stake not filed{% endif %}</span>
       </div>
       <div class="comparison-field">
-        <div class="comparison-field-label">Entity Name</div>
-        <div class="comparison-field-value">{{ partner_a }}</div>
+        <div class="comparison-field-label">Entity name</div>
+        <div class="comparison-field-value">{{ p.name }}</div>
       </div>
       <div class="comparison-field">
-        <div class="comparison-field-label">Group Affiliation</div>
-        <div class="comparison-field-value">Sunrise Group (GRP-017)</div>
+        <div class="comparison-field-label">Group</div>
+        <div class="comparison-field-value">{{ p.group_name }}</div>
       </div>
     </div>
-
-    <div class="comparison-col">
-      <div class="comparison-col-header">
-        <span>Partner Entity B</span>
-        <span class="badge badge-warn">{{ partner_b_pct }}% Equity</span>
-      </div>
-      <div class="comparison-field">
-        <div class="comparison-field-label">Entity Name</div>
-        <div class="comparison-field-value">{{ partner_b }}</div>
-      </div>
-      <div class="comparison-field">
-        <div class="comparison-field-label">Group Affiliation</div>
-        <div class="comparison-field-value">Apex Holdings Group (GRP-042)</div>
-      </div>
-    </div>
+    {% endfor %}
   </div>
 </div>
 
 <form method="POST" action="/rulings/{{ proposal_id }}" class="table-card p-6">
-  <h2 class="text-lg font-bold mb-4">Select Statutory Consolidation Formula</h2>
+  <h2 class="text-lg font-bold mb-4">Rule on control</h2>
 
   <div class="grid gap-4 mb-6">
     <label class="proposal-card cursor-pointer">
       <div class="flex items-center gap-3">
-        <input type="radio" name="ruling" value="LEAD_CONSOLIDATES" required>
+        <input type="radio" name="ruling" value="SINGLE" required>
         <div>
-          <div class="font-bold text-primary">1. Lead Investor Consolidates (100% Allocation)</div>
-          <p class="text-xs text-muted">
-            Controller exercises single management control. 100% of {{ gross_exposure | inr_cr }} is allocated to the designated controlling partner's group perimeter.
-          </p>
+          <div class="font-bold text-primary">Single controller</div>
+          <p class="text-xs text-muted">One holder controls the venture. It joins that holder's group; the other holders become minority holders.</p>
         </div>
       </div>
     </label>
 
     <label class="proposal-card cursor-pointer">
       <div class="flex items-center gap-3">
-        <input type="radio" name="ruling" value="EQUAL_SPLIT" checked required>
+        <input type="radio" name="ruling" value="JOINT" checked required>
         <div>
-          <div class="font-bold text-primary">2. Equal Split (50% / 50% Apportionment)</div>
-          <p class="text-xs text-muted">
-            Shared joint control: Apportions {{ (gross_exposure / 2) | inr_cr }} to Sunrise Group and {{ (gross_exposure / 2) | inr_cr }} to Apex Group.
-          </p>
+          <div class="font-bold text-primary">Joint control</div>
+          <p class="text-xs text-muted">The venture stays its own group. Its exposure counts against every controller's limit check, and once in the book total.</p>
         </div>
       </div>
     </label>
 
     <label class="proposal-card cursor-pointer">
       <div class="flex items-center gap-3">
-        <input type="radio" name="ruling" value="PROPORTIONAL" required>
+        <input type="radio" name="ruling" value="NONE" required>
         <div>
-          <div class="font-bold text-primary">3. Strictly Proportional to Equity Stakes</div>
-          <p class="text-xs text-muted">
-            Apportions exposure strictly based on verified MCA registered shareholding percentages.
-          </p>
+          <div class="font-bold text-primary">No control</div>
+          <p class="text-xs text-muted">No holder controls the venture. Every holder edge is rejected and the venture stands alone.</p>
         </div>
       </div>
     </label>
 
     <label class="proposal-card cursor-pointer">
       <div class="flex items-center gap-3">
-        <input type="radio" name="ruling" value="STANDALONE" required>
+        <input type="radio" name="ruling" value="CONNECTED" required>
         <div>
-          <div class="font-bold text-primary">4. Standalone (Zero Consolidation)</div>
-          <p class="text-xs text-muted">
-            Neither partner has decisive influence; entity is treated as an independent single borrower under §5.3.4.
-          </p>
+          <div class="font-bold text-primary">Holders are connected counterparties</div>
+          <p class="text-xs text-muted">Treated as joint control, and a link between the holders is filed for approval. Put the evidence for the link in the rationale below (at least 20 characters).</p>
         </div>
       </div>
     </label>
   </div>
 
   <div class="comparison-field mb-4">
-    <label for="controller" class="comparison-field-label">Designated Controlling Partner (If Lead Consolidates)</label>
+    <label for="controller" class="comparison-field-label">Controlling holder (single controller only)</label>
     <select id="controller" name="controller" class="form-select form-full">
-      <option value="{{ partner_a }}">{{ partner_a }} (Sunrise Group)</option>
-      <option value="{{ partner_b }}">{{ partner_b }} (Apex Group)</option>
+      {% for p in partners %}<option value="{{ p.entity_key }}">{{ p.name }}</option>{% endfor %}
+    </select>
+  </div>
+
+  <div class="comparison-field mb-4">
+    <label for="connected_edge_kind" class="comparison-field-label">Kind of link between the holders (connected only)</label>
+    <select id="connected_edge_kind" name="connected_edge_kind" class="form-select form-full">
+      <option value="CONTROL">One holder controls the other</option>
+      <option value="INTERDEP">Economic interdependence</option>
     </select>
   </div>
 
   <div class="comparison-field mb-6">
-    <label for="ruling-reason" class="comparison-field-label">Auditable Legal Rationale (Immutable Audit Log)</label>
-    <input type="text"
-           id="ruling-reason"
-           name="reason"
-           class="reason-textarea"
-           required
-           value="Joint Venture ruling executed under RBI LEF §5.3 following board representation review.">
+    <label for="ruling-reason" class="comparison-field-label">Rationale <span class="text-muted">· saved to the immutable audit log</span></label>
+    <input type="text" id="ruling-reason" name="reason" class="reason-textarea" required minlength="1" maxlength="2000"
+           placeholder="Describe the evidence behind your ruling…">
   </div>
 
   <div class="flex justify-between items-center">
-    <span class="text-muted text-xs">
-      Reviewer: {{ user.username }} ({{ user.role }})
-    </span>
+    <span class="text-muted text-xs">Reviewer: {{ user.username }} ({{ user.role }})</span>
     <div class="toolbar-group">
       <a href="/queue" class="btn btn-secondary">Cancel</a>
-      <button type="submit" class="btn btn-primary">
-        Apply Statutory Ruling & Consolidate
-      </button>
+      <button type="submit" class="btn btn-primary">Record ruling</button>
     </div>
   </div>
 </form>

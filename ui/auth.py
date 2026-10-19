@@ -6,15 +6,15 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlparse
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -35,17 +35,30 @@ class SessionUser:
     role: Literal["APPROVER", "ANALYST"]
 
 
-def get_session_serializer() -> URLSafeTimedSerializer:
-    secret = os.environ.get("TALOS_SESSION_SECRET")
-    if not secret:
-        # Fallback to local default if not set
-        secret = "talos_dev_secret_replace_in_production_32chars"
-    return URLSafeTimedSerializer(secret)
+_MOCK_SECRET = secrets.token_urlsafe(32)  # per-process, so mock cookies die with the server
 
 
 def is_mock_mode() -> bool:
     """Return True strictly if TALOS_MOCK=1 is set in the environment."""
     return os.environ.get("TALOS_MOCK") == "1"
+
+
+def get_secret(purpose: str = "session") -> bytes:
+    """Signing key for `purpose`, derived from TALOS_SESSION_SECRET.
+
+    There is no default: an unset or placeholder secret is an error, except in mock mode,
+    where a random per-process secret is used. A key in the source tree would be public.
+    """
+    secret = os.environ.get("TALOS_SESSION_SECRET", "")
+    if not secret or secret.startswith("change_me"):
+        if not is_mock_mode():
+            raise RuntimeError("TALOS_SESSION_SECRET is not set (or is still the .env.example placeholder).")
+        secret = _MOCK_SECRET
+    return hashlib.sha256(f"{purpose}:{secret}".encode()).digest()
+
+
+def get_session_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(get_secret("session"))
 
 
 def get_client_ip(request: Request) -> str:

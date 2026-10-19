@@ -1,17 +1,23 @@
 """ui/queries.py: Database query abstraction layer.
 
-Connects as TALOS_READER to execute read-only queries against REPORT.* views,
-or transparently delegates to ui/mock_data.py when TALOS_MOCK=1 is set.
+Connects as TALOS_READER to execute read-only queries against REPORT.* views (the reader holds
+SELECT on REPORT only, so nothing here may touch GOV, GRAPH or RESOLVE directly), or
+transparently delegates to ui/mock_data.py when TALOS_MOCK=1 is set. Decisions go through
+orchestrator.decide, which connects as TALOS_APPROVER.
+
+orchestrator.db.connect() returns dict rows with lower-case keys (fetch_dict, lower_ident).
 """
 
 from __future__ import annotations
 
-import json
-import os
 from decimal import Decimal
 from typing import Any
 
 from ui.auth import is_mock_mode
+from ui.batch_token import generate_batch_token, verify_batch_token
+from ui.formatting import parse_evidence
+
+DEFAULT_BUSINESS_DATE = "2026-09-30"
 
 
 class DatabaseUnavailableError(Exception):
@@ -21,6 +27,7 @@ class DatabaseUnavailableError(Exception):
 def _get_reader_connection():
     """Connect to Exasol as TALOS_READER or raise DatabaseUnavailableError."""
     from orchestrator.db import connect
+
     try:
         return connect("reader", autocommit=True)
     except Exception as e:
@@ -29,78 +36,97 @@ def _get_reader_connection():
         ) from e
 
 
+def _rows(conn, sql: str, **params: Any) -> list[dict[str, Any]]:
+    return conn.execute(sql, query_params=params).fetchall()
+
+
+def _dec(v: Any, default: str = "0") -> Decimal:
+    return Decimal(str(v)) if v is not None else Decimal(default)
+
+
+def _current_run(conn) -> tuple[str | None, str]:
+    """(run_id, business_date) of the newest successful run; business date falls back to the default."""
+    rows = _rows(conn, "SELECT run_id, business_date FROM REPORT.V_CURRENT_RUN")
+    if not rows:
+        return None, DEFAULT_BUSINESS_DATE
+    return rows[0]["run_id"], str(rows[0]["business_date"])[:10]
+
+
+def _current_business_date() -> str:
+    conn = _get_reader_connection()
+    try:
+        return _current_run(conn)[1]
+    finally:
+        conn.close()
+
+
 # -------------------------------------------------------------------------
 # Screen 1: Exposure Board
 # -------------------------------------------------------------------------
-def get_board_data(business_date: str = "2026-09-30", sort: str = "hidden", view: str = "talos") -> dict[str, Any]:
+def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidden", view: str = "talos") -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import get_mock_board_data
+
         return get_mock_board_data(business_date=business_date, sort=sort, view=view)
 
     conn = _get_reader_connection()
     try:
-        # 1. Fetch latest run metadata
-        latest_run = conn.execute(
-            "SELECT run_id, business_date, known_at, status FROM REPORT.V_LATEST_RUN WHERE business_date = {bd}",
-            query_params={"bd": business_date},
-        ).fetchone()
+        latest = _rows(
+            conn,
+            "SELECT run_id, known_at FROM REPORT.V_LATEST_RUN WHERE business_date = {bd}",
+            bd=business_date,
+        )
+        run_id = latest[0]["run_id"] if latest else None
 
-        run_id = latest_run[0] if latest_run else None
-
-        # 2. Fetch group exposures
-        rows = conn.execute(
+        rows = _rows(
+            conn,
             """
             SELECT group_key, group_name, head_entity_key, member_count,
                    reported_exposure, limit_exposure, capital_base,
                    utilisation_pct, is_large, is_breach, group_flags,
                    hidden_exposure, headroom
             FROM REPORT.V_GROUP_EXPOSURE
-            WHERE run_id = {run_id}
+            WHERE run_id = {run_id} AND limit_exposure > 0
             """,
-            query_params={"run_id": run_id},
-        ).fetchall()
+            run_id=run_id,
+        )
 
         groups = []
         hidden_total = Decimal("0.00")
+        unassigned = Decimal("0.00")
         breaches_count = 0
         large_count = 0
 
         for r in rows:
-            rep_exp = Decimal(str(r[4] or 0))
-            lim_exp = Decimal(str(r[5])) if r[5] is not None else None
-            cap_base = Decimal(str(r[6] or 4200000000))
-            util = Decimal(str(r[7] or 0))
-            is_l = bool(r[8])
-            is_b = bool(r[9])
-            flags = str(r[10] or "")
-            hid_raw = Decimal(str(r[11] or 0))
-            headroom = Decimal(str(r[12] or 0))
-
-            # Strictly clamp hidden exposure KPI at 0
-            hid_clamped = max(Decimal("0.00"), hid_raw)
+            flags = str(r["group_flags"] or "")
+            unresolved = "UNRESOLVED" in flags  # a lone unlinked record: shown as pending, not as a figure
+            lim_exp = None if unresolved else _dec(r["limit_exposure"])
+            # Hidden exposure is clamped at zero: Talos can only unmask, never shrink, a reported figure.
+            hid_clamped = Decimal("0.00") if unresolved else max(Decimal("0.00"), _dec(r["hidden_exposure"]))
             hidden_total += hid_clamped
-            if is_b:
+            if unresolved or "UNASSIGNED" in flags:
+                unassigned += _dec(r["limit_exposure"])
+            if r["is_breach"] and not unresolved:
                 breaches_count += 1
-            if is_l:
+            if r["is_large"] and not unresolved:
                 large_count += 1
 
             groups.append({
-                "group_key": r[0],
-                "group_name": r[1] or "Unresolved Group",
-                "head_entity_key": r[2],
-                "member_count": r[3],
-                "reported_exposure": rep_exp,
+                "group_key": r["group_key"],
+                "group_name": r["group_name"] or "Unresolved Group",
+                "head_entity_key": r["head_entity_key"],
+                "member_count": r["member_count"],
+                "reported_exposure": _dec(r["reported_exposure"]),
                 "limit_exposure": lim_exp,
                 "hidden_exposure": hid_clamped,
-                "capital_base": cap_base,
-                "utilisation_pct": util,
-                "is_large": is_l,
-                "is_breach": is_b,
+                "capital_base": _dec(r["capital_base"]),
+                "utilisation_pct": _dec(r["utilisation_pct"]),
+                "is_large": bool(r["is_large"]),
+                "is_breach": bool(r["is_breach"]),
                 "group_flags": flags,
-                "headroom": headroom,
+                "headroom": _dec(r["headroom"]),
             })
 
-        # Sorting
         if sort == "util":
             groups.sort(key=lambda g: g["utilisation_pct"], reverse=True)
         elif sort == "hidden":
@@ -111,12 +137,13 @@ def get_board_data(business_date: str = "2026-09-30", sort: str = "hidden", view
         return {
             "run_id": run_id,
             "business_date": business_date,
-            "known_at": str(latest_run[2]) if latest_run else "",
+            "known_at": str(latest[0]["known_at"]) if latest else "",
             "kpi": {
                 "hidden_exposure": hidden_total,
                 "breaches_count": breaches_count,
                 "large_count": large_count,
-                "unassigned_exposure": Decimal("0.00"),
+                "unassigned_exposure": unassigned,
+                "capital_base": groups[0]["capital_base"] if groups else None,
             },
             "groups": groups,
         }
@@ -130,39 +157,36 @@ def get_board_data(business_date: str = "2026-09-30", sort: str = "hidden", view
 def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str = "") -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import get_mock_queue_data
+
         return get_mock_queue_data(page=page, per_page=per_page, tier=tier, kind=kind)
 
     conn = _get_reader_connection()
     try:
-        # Check active batches
-        batches_raw = conn.execute(
-            """
-            SELECT batch_id, batch_kind, COUNT(*) total_count
-            FROM GOV.PROPOSAL
-            WHERE batch_id IS NOT NULL
-              AND proposal_id NOT IN (SELECT proposal_id FROM GOV.DECISION_COVERS)
-            GROUP BY batch_id, batch_kind
-            """
-        ).fetchall()
-
+        # Batch banners: V_PROPOSAL_QUEUE computes the totals and the policy-driven sample sizes.
         batches = []
-        for b in batches_raw:
-            b_id, b_kind, b_tot = b[0], b[1], int(b[2])
-            is_rec = b_kind == "RECORD_LINK"
-            pct = 5 if is_rec else 2
-            min_k = 20
-            sample_cnt = min(b_tot, max(min_k, -(-pct * b_tot // 100)))
+        for b in _rows(
+            conn,
+            """
+            SELECT batch_id, batch_kind, MAX(batch_total_count) AS total_count, MAX(batch_sample_count) AS sample_count
+            FROM REPORT.V_PROPOSAL_QUEUE
+            WHERE batch_id IS NOT NULL AND batch_failed = FALSE
+            GROUP BY batch_id, batch_kind
+            ORDER BY batch_id
+            """,
+        ):
+            is_rec = b["batch_kind"] == "RECORD_LINK"
+            total, sample = int(b["total_count"]), int(b["sample_count"])
             batches.append({
-                "batch_id": b_id,
-                "batch_kind": b_kind,
+                "batch_id": b["batch_id"],
+                "batch_kind": b["batch_kind"],
                 "title": "Exact-ID Record Links Batch" if is_rec else "Corroborated Ownership Edges Batch",
-                "desc": f"{b_tot:,} matches waiting. Review a representative sample of {sample_cnt} to approve.",
-                "total_count": b_tot,
-                "sample_count": sample_cnt,
+                "desc": f"{total:,} matches waiting. Review a representative sample of {sample} to approve.",
+                "total_count": total,
+                "sample_count": sample,
             })
 
-        # Fetch open individual proposals
-        clauses = ["proposal_id NOT IN (SELECT proposal_id FROM GOV.DECISION_LOG WHERE proposal_id IS NOT NULL)"]
+        # Individual cards: batch members are decided through their batch, unless the batch failed.
+        clauses = ["(batch_id IS NULL OR batch_failed = TRUE)"]
         params: dict[str, Any] = {}
         if tier:
             clauses.append("tier = {tier}")
@@ -170,47 +194,46 @@ def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str 
         if kind:
             clauses.append("kind = {kind}")
             params["kind"] = kind
-
         where_sql = " AND ".join(clauses)
+
+        total_items = int(conn.execute(
+            f"SELECT COUNT(*) FROM REPORT.V_PROPOSAL_QUEUE WHERE {where_sql}", query_params=params
+        ).fetchval())
+        total_pages = max(1, (total_items + per_page - 1) // per_page)
+        page = min(max(1, page), total_pages)
+
+        # per_page and offset are ints validated by the route, so formatting them in is safe.
         proposals_raw = conn.execute(
             f"""
-            SELECT proposal_id, kind, subject_key, tier, tier_reason,
-                   rupee_impact, crosses_limit, crosses_le, group_before_pct,
-                   group_after_pct, group_name, evidence_json
+            SELECT proposal_id, kind, subject_key, tier, tier_reason, warning, rupee_impact,
+                   crosses_limit, crosses_le, group_before_pct, group_after_pct, group_name, evidence_json
             FROM REPORT.V_PROPOSAL_QUEUE
             WHERE {where_sql}
-            ORDER BY crosses_limit DESC, crosses_le DESC, rupee_impact DESC
+            ORDER BY crosses_limit DESC, crosses_le DESC, delta_amt DESC, proposal_id
+            LIMIT {int(per_page)} OFFSET {int((page - 1) * per_page)}
             """,
             query_params=params,
         ).fetchall()
 
-        proposals = []
-        for p in proposals_raw:
-            proposals.append({
-                "proposal_id": p[0],
-                "kind": p[1],
-                "subject_key": p[2],
-                "tier": p[3],
-                "tier_reason": p[4],
-                "rupee_impact": Decimal(str(p[5] or 0)),
-                "crosses_limit": int(p[6] or 0),
-                "crosses_le": int(p[7] or 0),
-                "group_before_pct": Decimal(str(p[8] or 0)),
-                "group_after_pct": Decimal(str(p[9] or 0)),
-                "group_name": p[10] or "",
-                "evidence_json": p[11],
-            })
-
-        # Server-side pagination
-        total_items = len(proposals)
-        total_pages = max(1, (total_items + per_page - 1) // per_page)
-        page = min(max(1, page), total_pages)
-        start_idx = (page - 1) * per_page
-        paginated = proposals[start_idx : start_idx + per_page]
+        proposals = [{
+            "proposal_id": p["proposal_id"],
+            "kind": p["kind"],
+            "subject_key": p["subject_key"],
+            "tier": p["tier"],
+            "tier_reason": p["tier_reason"],
+            "warning": p["warning"],
+            "rupee_impact": _dec(p["rupee_impact"]),
+            "crosses_limit": int(bool(p["crosses_limit"])),
+            "crosses_le": int(bool(p["crosses_le"])),
+            "group_before_pct": _dec(p["group_before_pct"]),
+            "group_after_pct": _dec(p["group_after_pct"]),
+            "group_name": p["group_name"] or "",
+            "evidence_json": p["evidence_json"],
+        } for p in proposals_raw]
 
         return {
             "batches": batches,
-            "proposals": paginated,
+            "proposals": proposals,
             "pagination": {
                 "page": page,
                 "per_page": per_page,
@@ -227,34 +250,53 @@ def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str 
 def get_batch_data(batch_id: str, user_name: str) -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import get_mock_batch_data
+
         return get_mock_batch_data(batch_id=batch_id, user_name=user_name)
 
     from orchestrator.decide import batch_sample
-    sample = batch_sample(batch_id)
-    # Generate token
-    from ui.mock_data import generate_batch_token
+
+    # batch_sample connects as TALOS_APPROVER (the reader cannot see GOV) and issues a fresh seed.
+    sample = batch_sample(batch_id, business_date=_current_business_date())
     token = generate_batch_token(user_name, batch_id, sample.seed, list(sample.sample_ids))
 
     conn = _get_reader_connection()
     try:
-        # Load sample details
+        ids = list(sample.sample_ids)
+        marks = ", ".join(f"{{p{i}}}" for i in range(len(ids)))
+        by_id = {
+            r["proposal_id"]: r
+            for r in _rows(
+                conn,
+                f"SELECT proposal_id, kind, evidence_json FROM REPORT.V_PROPOSAL_QUEUE WHERE proposal_id IN ({marks})",
+                **{f"p{i}": pid for i, pid in enumerate(ids)},
+            )
+        } if ids else {}
+
         items = []
-        for pid in sample.sample_ids:
-            row = conn.execute(
-                "SELECT proposal_id, subject_key, evidence_json FROM GOV.PROPOSAL WHERE proposal_id = {pid}",
-                query_params={"pid": pid},
-            ).fetchone()
-            if row:
-                ev = json.loads(row[2])
+        for pid in ids:  # keep the sample's order
+            row = by_id.get(pid)
+            ev = parse_evidence(row["evidence_json"]) if row else {"book": {}, "registry": {}}
+            if row and row["kind"] == "OWNERSHIP":
                 items.append({
-                    "proposal_id": row[0],
-                    "source_a": ev.get("book", {}).get("source", ""),
-                    "name_a": ev.get("book", {}).get("raw_name", ""),
-                    "pan_a": ev.get("book", {}).get("pan", "—"),
+                    "proposal_id": pid,
+                    "source_a": "REG",
+                    "name_a": ev["book"].get("holder_name", ""),
+                    "pan_a": ev["book"].get("stake_pct") or "—",
                     "source_b": "REG",
-                    "name_b": ev.get("registry", {}).get("entity_name", ""),
-                    "pan_b": ev.get("registry", {}).get("pan", "—"),
-                    "status": "Sample Pair",
+                    "name_b": ev["book"].get("held_name", ""),
+                    "pan_b": ev["book"].get("held_cin") or "—",
+                    "status": "Corroborated ownership edge",
+                })
+            else:
+                items.append({
+                    "proposal_id": pid,
+                    "source_a": ev["book"].get("source", ""),
+                    "name_a": ev["book"].get("raw_name", ""),
+                    "pan_a": ev["book"].get("pan") or "—",
+                    "source_b": "REG",
+                    "name_b": ev["registry"].get("entity_name", ""),
+                    "pan_b": ev["registry"].get("pan") or "—",
+                    "status": ev.get("tier_reason") or "Sample pair",
                 })
         return {
             "batch_id": batch_id,
@@ -276,52 +318,134 @@ def get_batch_data(batch_id: str, user_name: str) -> dict[str, Any]:
 def execute_decision(proposal_id: str, decision: str, reason: str, reviewer_name: str, reviewer_role: str) -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import execute_mock_decision
+
         return execute_mock_decision(proposal_id, decision, reason, reviewer_name)
 
     from orchestrator.decide import Reviewer, decide
-    reviewer = Reviewer(name=reviewer_name, role=reviewer_role)  # type: ignore[arg-type]
-    res = decide(proposal_id, decision=decision, reason=reason, reviewer=reviewer)  # type: ignore[arg-type]
 
-    # Return refreshed KPI
-    board = get_board_data()
+    bd = _current_business_date()
+    reviewer = Reviewer(name=reviewer_name, role=reviewer_role)  # type: ignore[arg-type]
+    res = decide(proposal_id, decision=decision, reason=reason, reviewer=reviewer, business_date=bd)  # type: ignore[arg-type]
     return {
         "proposal_id": proposal_id,
         "decision": decision,
         "decision_id": res.decision_id,
-        "kpi": board["kpi"],
+        "kpi": get_board_data(business_date=bd)["kpi"],
     }
 
 
-def execute_batch(batch_id: str, seed: int, token: str, verdicts: dict[str, bool], reason: str, reviewer_name: str, reviewer_role: str) -> dict[str, Any]:
+def execute_batch(
+    batch_id: str,
+    seed: int,
+    token: str,
+    verdicts: dict[str, bool],
+    reason: str,
+    reviewer_name: str,
+    reviewer_role: str,
+) -> dict[str, Any]:
+    # The token binds (reviewer, batch, seed, sample) as issued on GET; the seed comes from the token,
+    # never from the form, and batch_decide re-derives the sample from it before accepting verdicts.
+    seed = verify_batch_token(token, reviewer_name, batch_id, list(verdicts))
+
     if is_mock_mode():
         from ui.mock_data import execute_mock_batch
+
         return execute_mock_batch(batch_id, seed, token, verdicts, reason, reviewer_name)
 
     from orchestrator.decide import Reviewer, batch_decide
+
+    bd = _current_business_date()
     reviewer = Reviewer(name=reviewer_name, role=reviewer_role)  # type: ignore[arg-type]
-    res = batch_decide(batch_id=batch_id, seed=seed, verdicts=verdicts, reason=reason, reviewer=reviewer)
-    board = get_board_data()
+    res = batch_decide(batch_id=batch_id, seed=seed, verdicts=verdicts, reason=reason, reviewer=reviewer, business_date=bd)
     return {
         "batch_id": batch_id,
         "status": res.decision,
-        "kpi": board["kpi"],
+        "kpi": get_board_data(business_date=bd)["kpi"],
     }
 
 
-def execute_ruling(proposal_id: str, ruling: str, controller: str | None, reason: str, reviewer_name: str, reviewer_role: str) -> dict[str, Any]:
+def get_ruling_data(proposal_id: str) -> dict[str, Any] | None:
+    """The JV a CONTROL_RULING proposal is about: its holders, their stakes and groups, and its exposure."""
+    if is_mock_mode():
+        from ui.mock_data import get_mock_ruling_data
+
+        return get_mock_ruling_data(proposal_id)
+
+    conn = _get_reader_connection()
+    try:
+        rows = _rows(
+            conn,
+            "SELECT kind, evidence_json, rupee_impact FROM REPORT.V_PROPOSAL_QUEUE WHERE proposal_id = {pid}",
+            pid=proposal_id,
+        )
+        if not rows or rows[0]["kind"] != "CONTROL_RULING":
+            return None
+        ev = parse_evidence(rows[0]["evidence_json"])
+        holders = list(ev.get("holders") or [])
+        stakes = ev.get("stakes") or {}
+        run_id, _ = _current_run(conn)
+
+        partners = []
+        for key in holders:
+            name = _rows(conn, "SELECT entity_name FROM REPORT.V_ENTITY_NAME WHERE entity_key = {k}", k=key)
+            grp = _rows(
+                conn,
+                """
+                SELECT g.group_name FROM REPORT.V_ENTITY_EXPOSURE e
+                JOIN REPORT.V_GROUP_EXPOSURE g ON g.run_id = e.run_id AND g.group_key = e.group_key
+                WHERE e.run_id = {run_id} AND e.entity_key = {k}
+                """,
+                run_id=run_id,
+                k=key,
+            )
+            partners.append({
+                "entity_key": key,
+                "name": name[0]["entity_name"] if name else key,
+                "pct": stakes.get(key),
+                "group_name": grp[0]["group_name"] if grp else "No exposure in the book",
+            })
+        return {
+            "proposal_id": proposal_id,
+            "entity_name": ev.get("held_name") or ev.get("held_entity_key") or proposal_id,
+            "gross_exposure": _dec(rows[0]["rupee_impact"]),
+            "partners": partners,
+        }
+    finally:
+        conn.close()
+
+
+def execute_ruling(
+    proposal_id: str,
+    ruling: str,
+    controller: str | None,
+    reason: str,
+    reviewer_name: str,
+    reviewer_role: str,
+    connected_edge_kind: str = "CONTROL",
+) -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import execute_mock_ruling
+
         return execute_mock_ruling(proposal_id, ruling, controller, reason, reviewer_name)
 
     from orchestrator.decide import Reviewer, rule
+
+    bd = _current_business_date()
     reviewer = Reviewer(name=reviewer_name, role=reviewer_role)  # type: ignore[arg-type]
-    res = rule(proposal_id=proposal_id, ruling=ruling, controller=controller, reason=reason, reviewer=reviewer)  # type: ignore[arg-type]
-    board = get_board_data()
+    res = rule(
+        proposal_id=proposal_id,
+        ruling=ruling,  # type: ignore[arg-type]
+        controller=controller,
+        reason=reason,
+        reviewer=reviewer,
+        business_date=bd,
+        connected_edge_kind=connected_edge_kind,  # type: ignore[arg-type]
+    )
     return {
         "proposal_id": proposal_id,
         "ruling": ruling,
         "decision_id": res.decision_id,
-        "kpi": board["kpi"],
+        "kpi": get_board_data(business_date=bd)["kpi"],
     }
 
 
@@ -331,56 +455,79 @@ def execute_ruling(proposal_id: str, ruling: str, controller: str | None, reason
 def get_lineage_group_data(group_key: str, run_id: str | None = None) -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import get_mock_lineage_group_data
+
         return get_mock_lineage_group_data(group_key=group_key, run_id=run_id)
 
     conn = _get_reader_connection()
     try:
-        latest = conn.execute("SELECT run_id FROM REPORT.V_LATEST_RUN").fetchval()
-        is_latest = (run_id is None or run_id == latest)
-        effective_run_id = run_id or latest
+        current, _ = _current_run(conn)
+        is_latest = run_id is None or run_id == current
+        effective_run_id = run_id or current
 
-        tree_nodes = []
+        group_rows = _rows(
+            conn,
+            "SELECT group_name FROM REPORT.V_GROUP_EXPOSURE WHERE run_id = {run_id} AND group_key = {gk}",
+            run_id=effective_run_id,
+            gk=group_key,
+        )
+        group_name = group_rows[0]["group_name"] if group_rows else "Group Lineage"
+
+        # The ownership tree is built from today's confirmed edges, so it is only shown for the latest run.
+        tree_nodes: list[dict[str, Any]] = []
         if is_latest:
-            tree_raw = conn.execute(
+            tree_nodes.append({"entity_name": group_name, "depth": 0, "closes_cycle": False, "stake_pct": "head", "is_head": True})
+            for t in _rows(
+                conn,
                 """
-                SELECT held_name, depth, closes_cycle, control_type, stake_pct, entity_key = root_key is_head
+                SELECT held_name, depth, closes_cycle, control_type, stake_pct
                 FROM REPORT.V_OWNERSHIP_PATH
                 WHERE root_key = {gk}
                 ORDER BY depth, held_name
                 """,
-                query_params={"gk": group_key},
-            ).fetchall()
-            for t in tree_raw:
+                gk=group_key,
+            ):
                 tree_nodes.append({
-                    "entity_name": t[0],
-                    "depth": t[1],
-                    "closes_cycle": bool(t[2]),
-                    "stake_pct": f"{t[4]:.1f}%" if t[4] else t[3],
-                    "is_head": bool(t[5]),
+                    "entity_name": t["held_name"],
+                    "depth": int(t["depth"]),
+                    "closes_cycle": bool(t["closes_cycle"]),
+                    "stake_pct": f"{_dec(t['stake_pct']):.1f}%" if t["stake_pct"] is not None else (t["control_type"] or ""),
+                    "is_head": False,
                 })
 
-        members_raw = conn.execute(
+        books = {
+            r["entity_key"]: r["books"]
+            for r in _rows(
+                conn,
+                """
+                SELECT entity_key, GROUP_CONCAT(DISTINCT source_system ORDER BY source_system SEPARATOR ', ') AS books
+                FROM REPORT.V_LINEAGE
+                WHERE run_id = {run_id} AND group_key = {gk} AND membership_kind = 'MEMBER'
+                GROUP BY entity_key
+                """,
+                run_id=effective_run_id,
+                gk=group_key,
+            )
+        }
+        members = [{
+            "entity_key": m["entity_key"],
+            "entity_name": m["entity_name"] or m["entity_key"],
+            "exposure": _dec(m["book_exposure"]),
+            "books": books.get(m["entity_key"], "—"),
+        } for m in _rows(
+            conn,
             """
             SELECT entity_key, entity_name, book_exposure
             FROM REPORT.V_ENTITY_EXPOSURE
             WHERE run_id = {run_id} AND group_key = {gk}
             ORDER BY book_exposure DESC
             """,
-            query_params={"run_id": effective_run_id, "gk": group_key},
-        ).fetchall()
-
-        members = []
-        for m in members_raw:
-            members.append({
-                "entity_key": m[0],
-                "entity_name": m[1] or m[0],
-                "exposure": Decimal(str(m[2] or 0)),
-                "books": "LOS, TSY, GTE",
-            })
+            run_id=effective_run_id,
+            gk=group_key,
+        )]
 
         return {
             "group_key": group_key,
-            "group_name": tree_nodes[0]["entity_name"] if tree_nodes else "Group Lineage",
+            "group_name": group_name,
             "run_id": effective_run_id,
             "is_latest": is_latest,
             "tree_nodes": tree_nodes,
@@ -390,18 +537,65 @@ def get_lineage_group_data(group_key: str, run_id: str | None = None) -> dict[st
         conn.close()
 
 
-def get_lineage_rows_data(group_key: str, source: str = "", product: str = "", run_id: str | None = None) -> list[dict[str, Any]]:
+def get_lineage_entity_data(entity_key: str) -> dict[str, Any] | None:
     if is_mock_mode():
-        from ui.mock_data import get_mock_lineage_rows_data
-        return get_mock_lineage_rows_data(group_key=group_key, source=source, product=product, run_id=run_id)
+        from ui.mock_data import get_mock_lineage_entity_data
+
+        return get_mock_lineage_entity_data(entity_key)
 
     conn = _get_reader_connection()
     try:
-        latest = conn.execute("SELECT run_id FROM REPORT.V_LATEST_RUN").fetchval()
-        effective_run_id = run_id or latest
+        run_id, _ = _current_run(conn)
+        rows = _rows(
+            conn,
+            """
+            SELECT e.entity_key, e.entity_name, e.group_key, g.group_name, e.book_exposure,
+                   e.funded_amt, e.undrawn_amt, e.holding_amt, e.gte_fin_amt, e.gte_perf_amt, e.published_at
+            FROM REPORT.V_ENTITY_EXPOSURE e
+            LEFT JOIN REPORT.V_GROUP_EXPOSURE g ON g.run_id = e.run_id AND g.group_key = e.group_key
+            WHERE e.run_id = {run_id} AND e.entity_key = {k}
+            """,
+            run_id=run_id,
+            k=entity_key,
+        )
+        if not rows:
+            return None
+        r = rows[0]
+        return {
+            "entity_key": entity_key,
+            "entity_name": r["entity_name"] or entity_key,
+            "cin": entity_key.removeprefix("E:") if entity_key.startswith("E:") else None,
+            "group_key": r["group_key"],
+            "group_name": r["group_name"] or r["group_key"],
+            "exposure": _dec(r["book_exposure"]),
+            "published_at": str(r["published_at"]) if r["published_at"] else None,
+            "components": [
+                ("Funded", _dec(r["funded_amt"])),
+                ("Undrawn (CCF)", _dec(r["undrawn_amt"])),
+                ("Treasury holdings", _dec(r["holding_amt"])),
+                ("Financial guarantees", _dec(r["gte_fin_amt"])),
+                ("Performance guarantees", _dec(r["gte_perf_amt"])),
+            ],
+        }
+    finally:
+        conn.close()
 
-        clauses = ["run_id = {run_id}", "group_key = {gk}"]
-        params: dict[str, Any] = {"run_id": effective_run_id, "gk": group_key}
+
+def get_lineage_rows_data(group_key: str, source: str = "", product: str = "", run_id: str | None = None) -> list[dict[str, Any]]:
+    if is_mock_mode():
+        from ui.mock_data import get_mock_lineage_rows_data
+
+        return get_mock_lineage_rows_data(group_key=group_key or "GRP-017", source=source, product=product, run_id=run_id)
+
+    conn = _get_reader_connection()
+    try:
+        effective_run_id = run_id or _current_run(conn)[0]
+
+        clauses = ["run_id = {run_id}"]
+        params: dict[str, Any] = {"run_id": effective_run_id}
+        if group_key:  # empty = every group in the run (capped below)
+            clauses.append("group_key = {gk}")
+            params["gk"] = group_key
         if source:
             clauses.append("source_system = {src}")
             params["src"] = source
@@ -409,37 +603,34 @@ def get_lineage_rows_data(group_key: str, source: str = "", product: str = "", r
             clauses.append("product = {prod}")
             params["prod"] = product
 
-        where_sql = " AND ".join(clauses)
         rows_raw = conn.execute(
             f"""
             SELECT entity_name, source_system, source_row_id, product, exposure_component,
                    gross_amount, ccf, exposure_amount, link_proposal_id, link_decision_id,
                    reviewer, decided_at, tier
             FROM REPORT.V_LINEAGE
-            WHERE {where_sql}
+            WHERE {" AND ".join(clauses)}
             ORDER BY exposure_amount DESC
+            LIMIT 1000
             """,
             query_params=params,
         ).fetchall()
 
-        rows = []
-        for r in rows_raw:
-            rows.append({
-                "entity_name": r[0],
-                "source_system": r[1],
-                "source_row_id": r[2],
-                "product": r[3],
-                "component": r[4],
-                "gross_amount": Decimal(str(r[5] or 0)),
-                "ccf": Decimal(str(r[6] or 0)),
-                "exposure_amount": Decimal(str(r[7] or 0)),
-                "proposal_id": r[8],
-                "decision_id": r[9],
-                "reviewer": r[10] or "System",
-                "decided_at": str(r[11]) if r[11] else "—",
-                "tier": r[12] or "T0",
-            })
-        return rows
+        return [{
+            "entity_name": r["entity_name"],
+            "source_system": r["source_system"],
+            "source_row_id": r["source_row_id"],
+            "product": r["product"],
+            "component": r["exposure_component"],
+            "gross_amount": _dec(r["gross_amount"]),
+            "ccf": _dec(r["ccf"]),
+            "exposure_amount": _dec(r["exposure_amount"]),
+            "proposal_id": r["link_proposal_id"],
+            "decision_id": r["link_decision_id"],
+            "reviewer": r["reviewer"] or "System",
+            "decided_at": str(r["decided_at"]) if r["decided_at"] else "—",
+            "tier": r["tier"] or "—",
+        } for r in rows_raw]
     finally:
         conn.close()
 
@@ -447,46 +638,45 @@ def get_lineage_rows_data(group_key: str, source: str = "", product: str = "", r
 def get_pipeline_data() -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import get_mock_pipeline_data
+
         return get_mock_pipeline_data()
 
     conn = _get_reader_connection()
     try:
-        timings_raw = conn.execute(
-            "SELECT stage, rows_affected, seconds FROM REPORT.V_PIPELINE_TIMING ORDER BY started_at"
-        ).fetchall()
-        timings = [{"stage": r[0], "rows": int(r[1] or 0), "seconds": float(r[2] or 0)} for r in timings_raw]
-
-        paths_raw = conn.execute(
-            "SELECT via_path, candidate_count FROM REPORT.V_CANDIDATE_PATHS ORDER BY candidate_count DESC"
-        ).fetchall()
-        paths = [{"via_path": r[0], "count": int(r[1] or 0)} for r in paths_raw]
-
-        tiers_raw = conn.execute("SELECT tier, count FROM REPORT.V_TIER_COUNTS ORDER BY tier").fetchall()
-        tiers = [{"tier": r[0], "count": int(r[1] or 0)} for r in tiers_raw]
-
-        summary_row = conn.execute(
+        timings = [
+            {"stage": r["stage"], "rows": int(r["rows_affected"] or 0), "seconds": float(r["seconds"] or 0)}
+            for r in _rows(conn, "SELECT stage, rows_affected, seconds FROM REPORT.V_PIPELINE_TIMING ORDER BY started_at")
+        ]
+        paths = [
+            {"via_path": r["via_path"], "count": int(r["candidate_count"] or 0)}
+            for r in _rows(conn, "SELECT via_path, candidate_count FROM REPORT.V_CANDIDATE_PATHS ORDER BY candidate_count DESC")
+        ]
+        tiers = [
+            {"tier": r["tier"], "count": int(r["n"] or 0)}
+            for r in _rows(conn, 'SELECT tier, "COUNT" AS n FROM REPORT.V_TIER_COUNTS ORDER BY tier')
+        ]
+        s = (_rows(
+            conn,
             """
             SELECT total_book_records, total_reg_entities, total_candidates,
                    settled_in_sql_pct, sent_to_model_pct, reduction_ratio
             FROM REPORT.V_PIPELINE_SUMMARY
-            """
-        ).fetchone()
-
-        summary = {
-            "total_book_records": int(summary_row[0] or 0) if summary_row else 0,
-            "total_reg_entities": int(summary_row[1] or 0) if summary_row else 0,
-            "total_candidates": int(summary_row[2] or 0) if summary_row else 0,
-            "settled_in_sql_pct": Decimal(str(summary_row[3] or 100)),
-            "sent_to_model_pct": Decimal(str(summary_row[4] or 0)),
-            "reduction_ratio": Decimal(str(summary_row[5] or 99.9)),
-        }
+            """,
+        ) or [None])[0]
 
         return {
             "job_id": "LATEST_MATCH",
             "timings": timings,
             "paths": paths,
             "tiers": tiers,
-            "summary": summary,
+            "summary": {
+                "total_book_records": int(s["total_book_records"] or 0) if s else 0,
+                "total_reg_entities": int(s["total_reg_entities"] or 0) if s else 0,
+                "total_candidates": int(s["total_candidates"] or 0) if s else 0,
+                "settled_in_sql_pct": _dec(s["settled_in_sql_pct"] if s else None),
+                "sent_to_model_pct": _dec(s["sent_to_model_pct"] if s else None),
+                "reduction_ratio": _dec(s["reduction_ratio"] if s else None),
+            },
         }
     finally:
         conn.close()
@@ -495,28 +685,29 @@ def get_pipeline_data() -> dict[str, Any]:
 def get_audit_data() -> list[dict[str, Any]]:
     if is_mock_mode():
         from ui.mock_data import get_mock_audit_data
+
         return get_mock_audit_data()
 
     conn = _get_reader_connection()
     try:
-        runs_raw = conn.execute(
-            """
-            SELECT run_id, business_date, known_at, code_version, output_hash, status, replay_of
-            FROM REPORT.V_RUNS
-            ORDER BY started_at DESC
-            """
-        ).fetchall()
         return [
             {
-                "run_id": r[0],
-                "business_date": str(r[1]),
-                "known_at": str(r[2]),
-                "code_version": r[3],
-                "output_hash": r[4],
-                "status": r[5],
-                "replay_of": r[6],
+                "run_id": r["run_id"],
+                "business_date": str(r["business_date"]),
+                "known_at": str(r["known_at"]),
+                "code_version": r["code_version"],
+                "output_hash": r["output_hash"],
+                "status": r["status"],
+                "replay_of": r["replay_of"],
             }
-            for r in runs_raw
+            for r in _rows(
+                conn,
+                """
+                SELECT run_id, business_date, known_at, code_version, output_hash, status, replay_of
+                FROM REPORT.V_RUNS
+                ORDER BY started_at DESC
+                """,
+            )
         ]
     finally:
         conn.close()
@@ -531,6 +722,7 @@ def execute_replay(run_id: str) -> dict[str, Any]:
         }
 
     from orchestrator.replay import replay
+
     res = replay(run_id)
     return {
         "run_id": run_id,

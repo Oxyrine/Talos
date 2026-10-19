@@ -1,9 +1,15 @@
 """tests/test_formatting.py: Unit tests for Indian currency, percentage, and gauge formatting."""
 
 from decimal import Decimal
-import pytest
 
-from ui.formatting import inr_cr, inr_full, percentage, gauge_bar_width, gauge_bar_class, parse_evidence
+from ui.formatting import (
+    gauge_bar_class,
+    gauge_bar_width,
+    inr_cr,
+    inr_full,
+    parse_evidence,
+    percentage,
+)
 
 
 def test_inr_cr_formatting():
@@ -64,3 +70,25 @@ def test_parse_evidence():
     assert "registry" in res
     assert parse_evidence("invalid json") == {"book": {}, "registry": {}}
     assert parse_evidence(None) == {"book": {}, "registry": {}}
+
+
+def test_parse_evidence_maps_pipeline_shapes():
+    """sql/70 and sql/71 write flat evidence_json; the card templates read book/registry."""
+    from ui.formatting import parse_evidence
+
+    link = parse_evidence(
+        '{"source_a":"LOS","name_a_raw":"Sunrise Inds Pvt Ltd","name_b_raw":"Sunrise Industries Limited",'
+        '"city_a":"Mumbai","state_a":"MH","pincode_a":"400001","id_status":{"PAN":"agree","CIN":"missing","LEI":"missing"}}'
+    )
+    assert link["book"]["source"] == "LOS"
+    assert link["book"]["raw_name"] == "Sunrise Inds Pvt Ltd"
+    assert link["registry"]["entity_name"] == "Sunrise Industries Limited"
+    assert link["book"]["pan"] == "matches registry"
+
+    own = parse_evidence(
+        '{"kind":"OWNERSHIP","holder_entity_key":"E:U1","held_entity_key":"E:U2","holder_name":"A","held_name":"B","stake_pct":100.0}'
+    )
+    assert own["book"]["holder_cin"] == "U1" and own["book"]["stake_pct"] == "100.0%"
+
+    jv = parse_evidence('{"kind":"CONTROL_RULING","held_name":"JV","holders":["E:U1","E:U2"],"stakes":{"E:U1":50.0,"E:U2":50.0}}')
+    assert jv["held_entity"] == "JV" and jv["holder_a"] == "U1 (50.0%)" and jv["holder_b"] == "U2 (50.0%)"
