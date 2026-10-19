@@ -1,94 +1,51 @@
-# Talos: Regulatory, Technical & Exasol Defense Cheat Sheet (Q&A)
+# Q&A Cheat Sheet
 
----
+Short, checkable answers. Regulatory references are to the RBI Large Exposures Framework circular RBI/2018-19/196 of 3 June 2019, with paragraph numbers read from the RBI notification page on 19 Oct 2026. **Re-check them against the original PDF before the finals.** If you are asked something the circular doesn't clearly answer, say so rather than guess.
 
-## 1. Regulatory Defense & The Honesty Notes
+## 1. Regulation
 
-### Honesty Note 1: Synthetic Universe Cleanliness
-> [!NOTE]
-> **Anticipated Judge Question**: *"In the real world, corporate registry filings (MCA21) are messy, incomplete, and full of stale director filings. Why does your synthetic queue have clean numbers and manageable triage lists?"*
->
-> **Direct Answer**:  
-> *"We explicitly documented this in `docs/DECISIONS.md` under ADR-014. In our synthetic benchmark, we deliberately isolated the uncorroborated edges to the 11 planted test cases so that a reviewer can complete a full live regulatory demo in under 3 minutes.  
-> In a production banking deployment, MCA21 feeds contain thousands of uncorroborated holding links and director cross-appointments. However, Talos's core innovation is its **impact-ranked triage architecture**: even with 10,000 uncorroborated edges, sorting by `crosses_limit DESC, crosses_le DESC, rupee_impact DESC` guarantees that the 5 edges threatening the bank's regulatory capital appear on Page 1, while immaterial holding edges remain safely in background analyst queues."*
-
----
-
-### Honesty Note 2: Perimeter Exposure vs. Balance Sheet Delta
-> [!IMPORTANT]
-> **Anticipated Judge Question**: *"HoldCo's ₹36.4 cr was already on your loan book under its own name. In what sense is that exposure 'hidden', and why do you report a +₹72.0 cr perimeter delta?"*
->
-> **Direct Answer (Verbatim)**:  
-> *"The exposure was on the balance sheet, but reported under a completely separate borrower group.  
-> Under RBI LEF Master Circular §5.1, concentration limits apply to **Groups of Connected Counterparties (GCC)**. Prior to running Talos, the bank reported:
-> * Group A (Sunrise Industries): ₹40.00 cr (9.52% of capital) → Compliant.
-> * Group B (Sunrise Finvest HoldCo): ₹36.40 cr (8.67% of capital) → Compliant.
->
-> Because both perimeters were reported independently, neither triggered the 10% Large Exposure disclosure threshold nor the 25% Group Limit.  
-> When Talos unmasked the 100% MCA holding link, the two perimeters consolidated into a single group of **₹112.00 cr (26.67% of capital)**, exposing an illegal statutory breach of ₹7.00 crore beyond the ₹105.00 crore legal ceiling.  
-> Therefore:
-> * **The Group Perimeter Delta** is **+₹72.00 cr** (from ₹40.00 cr to ₹112.00 cr).
-> * **The Bank-Wide Loan Book Delta** is **+₹35.60 cr** (the unlinked Treasury CP and Trade Guarantee rows unmasked across books).  
-> Regulatory breaches are breaches of group perimeters, and failing to aggregate connected groups is a direct violation of Section 20 of the Banking Regulation Act."*
-
----
-
-## 2. Regulatory Citations & Statutory Cheat Sheet
-
-| RBI LEF Section | Statutory Mandate | Talos Implementation in Exasol |
+| Question | Answer | Where in Talos |
 |---|---|---|
-| **§5.1 (Group Limit)** | Maximum exposure to a Group of Connected Counterparties must not exceed **25.0%** of eligible capital. | Exposure aggregation in `V_GROUP_EXPOSURE` automatically flags `is_breach = TRUE` when `limit_exposure > capital_base * 0.25`. |
-| **§6.1 (Large Exposure)** | Exposures $\ge 10.0\%$ of capital must be reported to the Credit Committee and RBI CRILC. | `is_large = TRUE` flagged when `limit_exposure >= capital_base * 0.10`. Highlighted with amber needles on the SVG gauge. |
-| **§5.2 (Control Criteria)** | Common control established through equity stakes $\ge 50\%$, majority board seats, or power of appointment. | Recursive graph traversal via Exasol `CONNECT BY held_entity = PRIOR holder_entity` traversing only `CONFIRMED` edges with cycle pruning. |
-| **§5.3 (Interdependence)** | Connectedness through bilateral contagion (e.g. counterparty guarantees or funding dependence $>50\%$). | Dedicated `INTERDEP` edge types in `GOV.PROPOSAL` requiring mandatory human governance. |
-| **§5.3.4 (Joint Ventures)** | Joint ventures must be consolidated under designated statutory rules. | Live `/rulings/{id}` screen supporting 4 mathematical apportionment formulas: `LEAD_CONSOLIDATES`, `EQUAL_SPLIT`, `PROPORTIONAL`, and `STANDALONE`. |
+| What is the group limit? | 25% of the eligible capital base for a group of connected counterparties (para 5.2). The single-counterparty limit is 20%, with up to 5% more in exceptional cases (para 5.1). | `V_GROUP_EXPOSURE.is_breach` is `limit_exposure > capital_base × GROUP_LIMIT_PCT`. The percentage is a policy value. |
+| What is the capital base? | Tier 1 capital (para 5.3). The demo uses ₹420 cr, with a mid-period change from ₹400 cr on 1 Sep 2026 to show policy replay. | `GOV.POLICY_EVENT`, key `CAPITAL_BASE_INR`. |
+| What is a large exposure? | 10% or more of the eligible capital base (para 4.1), reported under para 4.2. | `is_large`, with `LE_LINE_PCT = 10`. |
+| When are counterparties connected? | When one controls the other, which includes more than 50% of voting rights (paras 6.2(a), 6.3), or when they are economically interdependent (para 6.2(b)), for example 50% or more of gross receipts or expenditure (para 6.7). Interdependence applies from 1 April 2020. | OWNERSHIP proposals need a stake above `MAJORITY_MIN_PCT` (50). INTERDEP proposals come from `RAW_LOS.DEPENDENCY` at `INTERDEP_SHARE_MIN` (50) and are always decided by a person. |
+| Joint ventures? | Not looked up for this version: check what the circular says about jointly controlled entities before the finals. Talos does not guess, it asks a person to rule. | A `CONTROL_RULING` proposal: SINGLE controller, JOINT control, NONE, or CONNECTED. |
 
----
+**Don't claim:** that the demo breach breaks a specific statute, that this is RBI-approved, or that it covers NBFCs. We compute against the limit in the framework; whether a breach is reportable is the bank's compliance call.
 
-## 3. Exasol Architecture & Performance Defense
+## 2. Honesty notes (say these before they are asked)
 
-### Why In-Database SQL Beats External Graph / ML Silos
-```
-Traditional Banking Stack                 Talos In-Database Stack
-┌─────────────────────────┐               ┌─────────────────────────┐
-│ Core Banking (Exasol)   │               │ Core Banking (Exasol)   │
-└────────────┬────────────┘               │                         │
-             │ Sensitive PII Export       │ • String Normalisation  │
-             ▼                            │ • Candidate Blocking    │
-┌─────────────────────────┐               │ • Token Jaccard Scoring │
-│ Cloud SaaS / Graph DB   │               │ • Recursive CONNECT BY  │
-│ (Neo4j / Neptune / ML)  │               │ • Bitemporal Rollup     │
-└────────────┬────────────┘               │ • Audit Hash Generation │
-             │ Non-Deterministic Output   └────────────┬────────────┘
-             ▼                                         │ Zero Data Egress
-┌─────────────────────────┐                            ▼
-│ Regulatory Misreporting │               ┌─────────────────────────┐
-└─────────────────────────┘               │ Bitwise Replay Proof    │
-                                          └─────────────────────────┘
-```
+1. **The data is synthetic and cleaner than a real registry.** The generator keeps uncorroborated ownership edges to the planted cases so the individual queue stays small (DEV-17). A real feed has far more, which is why the queue is ranked by live impact on the group figure.
+2. **Why the holding company is "hidden".** The ₹36.4 cr was on the books, in a separate group at 8.7%. What was missing was the ownership link that makes it part of Sunrise.
+3. **The evaluator's reviewer is an "accept the recommendation" oracle**, not a person, and it never reads the ground truth. Real reviewers can do better or worse.
+4. **No model is used in the demo.** The judge is provider-swappable and defaults to a stub (DEV-03, DEV-31).
+5. **Dev numbers are in-sample.** Thresholds were tuned on dev. The unseen test set is generated after the freeze and reported as it comes out.
 
-### The Candidate Reduction Funnel (Pure Exasol)
-* **Cartesian Product**: 25,000 book records $\times$ 4,000 registry entities = **100,000,000 potential pairs**.
-* **Stage 1 (Exact PAN/CIN Index Blocking)**: Resolves ~18,000 records in sub-second hash joins.
-* **Stage 2 (Fuzzy Token Blocking on First Stem + State)**: Produces ~35,000 candidate pairs.
-* **Reduction Ratio**: **99.965%** search space eliminated without invoking slow external python loops or foreign embeddings.
+## 3. Numbers on the dev data (`eval/results/dev.json`)
 
----
+| Metric | Result |
+|---|---|
+| Candidate pairs / reduction | 731,543 pairs, 99.27% of the 25,000 × 4,000 space removed |
+| Blocking recall | 99.88% |
+| ER precision / recall | 1.00 / 0.998 |
+| Wrong-ID records routed to T3 | 12 of 12 |
+| Decoys wrongly merged | 0 of 30 |
+| Hidden breaches found / false breaches | 6 of 6 / 0 |
+| Understated exposure, before → after | ₹246.7 cr → ₹0 |
+| Replay hash matches | 100% |
+| Resolved without a model | 95.6% |
 
-## 4. Algorithmic Integrity & The Paisa Standard
+## 4. Technical
 
-### 1. Integer Sample Sizing (No Float Drift)
-Floating-point arithmetic introduces non-deterministic sampling across OS architectures (e.g., `0.07 * 100 == 7.000000000000001`). Talos uses pure integer ceiling division:
-$$\text{calculated} = -(-\text{pct} \times \text{batch\_total} // 100)$$
-$$\text{sample\_size} = \min(\text{batch\_total}, \max(\text{min\_k}, \text{calculated}))$$
+**Why Exasol and not an external graph or ML service?** Borrower data stays in the database. Matching and grouping are set operations the engine parallelises. Reproducibility comes from append-only event tables plus a recorded manifest, so there is no separate system to keep in step.
 
-### 2. Zero-False-Merge Guarantee
-* When a human reviewer rejects a proposed link (such as the Kaveri Chemicals decoy `P-REC-GTE-SUNRISE-CONFLICT`), Talos writes an immutable `DO_NOT_LINK` barrier record into `GOV.DECISION_LOG`.
-* Downstream resolution queries execute an `ANTI JOIN` against active `DO_NOT_LINK` barriers.
-* Even if subsequent pipeline runs change scoring thresholds, a previously rejected pair is permanently barred from consolidating.
+**What in Exasol is load-bearing?** `EDIT_DISTANCE`, `SOUNDEX`, `COLOGNE_PHONETIC`, `HASH_SHA256`, regular expressions, `QUALIFY`, `MERGE` in a loop for label propagation, `CONNECT BY NOCYCLE` for the ownership tree, `GROUPING SETS` for the cube, and schema-level grants for the governance rules. The README maps each to its file.
 
-### 3. Cryptographic Bitemporal Replay
-* Runs record both `business_date` (the financial reporting as-of date) and `known_at` (the bitemporal transaction timestamp).
-* The final published report hash is computed as:
-  $$\text{SHA-256}(\text{sorted\_canonical\_json}(\text{V\_GROUP\_EXPOSURE}))$$
-* Any regulatory auditor can execute `talos replay <run_id>` and independently verify that the historical state matches the signed manifest down to the exact byte.
+**How is a run made reproducible?** A run stores its business date, `known_at`, the load IDs and policy event IDs it used, and the code version. The output hash is SHA-256 over sorted canonical lines (`M|…` for membership and `O|…` for output rows, amounts to two decimals, no run IDs or timestamps). `talos replay` rebuilds the run from that manifest and compares hashes.
+
+**Why integer sample sizes?** Sample size is `min(batch, max(min, ceil(pct × batch / 100)))` in integer arithmetic, and the sample is `random.Random(seed).sample(sorted ids, k)` with the seed shown on screen. The server re-derives the sample from the seed, so a reviewer can't choose which pairs to check.
+
+**How is a wrong merge prevented?** An ID that conflicts with the name is T3 and can't be batch-approved. A rejection writes a do-not-link event over all time. A later run re-proposes only if the evidence changes.
+
+**What are the limits?** Collateral carries no exposure by policy. One registry feed. Label propagation is plain SQL because Python UDFs failed the Nano probe. A cycle of owners with no outside parent becomes one group flagged `CYCLE_HEADED`, headed by its largest exposure.

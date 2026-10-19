@@ -355,7 +355,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         out_dir = f"data/out/{profile}"
         try:
             from data.generator.generate import generate
-            generate(profile=profile, out_dir=out_dir)
+            generate(profile=profile, out_dir=out_dir, seed_from_commit=getattr(args, "seed_from_commit", None))
         except ImportError:
             pass
 
@@ -517,6 +517,8 @@ def main(argv: list[str] | None = None) -> int:
     # eval
     eval_p = subparsers.add_parser("eval", help="Execute benchmark evaluation and write metrics")
     eval_p.add_argument("--profile", choices=["dev", "test"], default="dev")
+    eval_p.add_argument("--seed-from-commit", dest="seed_from_commit", default=None,
+                        help="Freeze-commit SHA that seeds the held-out test profile (required for --profile test)")
     eval_p.add_argument("--force", action="store_true", help="Force schema reset on non-localhost DSN")
 
     # add-reviewer

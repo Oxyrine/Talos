@@ -1,133 +1,70 @@
-# Talos: 3-Minute Video Submission & 15-Minute Finals Script
+# Demo Script
+
+Two scripts: the 3-minute submission video and the 15-minute finals walkthrough with answers to the questions we expect.
+
+**Figures.** The Sunrise numbers come from the generator's hero group and are asserted by `tests/test_generator.py`. Capital base is ₹420 cr, so the 10% line is ₹42 cr and the 25% limit is ₹105 cr.
+
+| Step | What has been approved | Reported (loan book) | Talos group figure |
+|---|---|---|---|
+| 0 | Nothing | ₹40.0 cr (9.5%) | not linked yet |
+| 1 | Exact-ID record links batch | ₹40.0 cr | ₹31.2 cr (7.4%), the head company alone |
+| 2 | Corroborated ownership batch | ₹40.0 cr | ₹58.2 cr (13.9%), over the 10% line |
+| 3 | The hero's fuzzy-match cards, and the wrong-PAN card rejected | ₹40.0 cr | ₹75.6 cr (18.0%) |
+| 4 | The single Sunrise Industries → Sunrise Finvest ownership card | ₹40.0 cr | ₹112.0 cr (26.7%), over the 25% limit |
+
+Sunrise Finvest and its two operating subsidiaries are a separate ₹36.4 cr group (8.7%) until step 4, so each side looks compliant on its own.
+
+> **Before recording:** run the whole flow once on live Exasol (`uv run talos demo`) and replace every `<…>` below with what the screen shows. The sample sizes, amounts and similarity scores depend on the generated data and were not fixed when this was written. Note that the exact-ID record batch is large on the dev data (about 20,000 records resolve by exact ID, so a 5% sample is about 1,000 pairs, see DEV-36 in `DECISIONS.md`). If that is too long to review on camera, lower `T0_SAMPLE_PCT` in policy or show the first screen of the sample and say so.
 
 ---
 
-# Part 1: Official 3-Minute Video Submission Script
+## Part 1: 3-minute video
 
-**Target Duration**: 02:55 – 03:00  
-**Presenter**: Lead Architect & Presenter (Aakash A)  
-**Resolution**: 1920x1080 @ 60 FPS (Dark Theme, High Contrast)
+Target 2:55 to 3:00. Dark theme, 1080p.
 
----
+### 0:00 – 0:35  The group nobody can see
+**Screen:** Exposure board (`/board`). Point at the review-position panel (hidden exposure, limit breaches) and then the Sunrise row: reported **₹40.0 cr, 9.5%**, compliant.
 
-### [00:00 – 00:35] Beat 1: The Invisible Concentration Crisis
-**Visual**:
-* Start full-screen on the **Exposure Board** (`http://localhost:8000/board`).
-* Cursor points to the Top KPI Ribbon: `Hidden Exposure: ₹0.0 cr`, `Limit Breaches: 0`.
-* Scroll down to row 17: **Sunrise Industries Group**.
-* Cursor highlights the reported figure: **₹40.00 cr (9.52%)** with compliant green badge.
+> The RBI Large Exposures Framework caps a bank's exposure to a group of connected borrowers at 25% of its Tier 1 capital, and requires anything at 10% or more to be reported. Here the loan system says Sunrise is ₹40 crore, under 10% of a ₹420 crore capital base. But the bank also holds Sunrise paper in treasury and guarantees in trade finance, under names that don't match, and some of Sunrise sits in a holding company nobody has linked to it. Talos finds those links, inside Exasol, and shows what the group really owes.
 
-**Voiceover (Spoken)**:
-> *"Every major banking failure begins with an invisible group concentration.  
-> Under the RBI's Large Exposures Framework, a bank's exposure to a connected group must never breach 25% of its capital base, with mandatory statutory disclosures at 10%.  
-> Look at our core loan book: Sunrise Industries shows an exposure of just ₹40.00 crore—under 10% of our ₹420 crore capital base. To our loan origination system, Sunrise is a safe, compliant borrower.  
-> But in reality, the bank holds commercial papers in Treasury, performance bonds in Trade Finance, and facilities across hidden subsidiaries.  
-> This is Talos: an in-database credit risk and entity resolution engine that runs entirely inside Exasol with zero external API calls."*
+### 0:35 – 1:15  Review a sample, not 5,000 rows
+**Screen:** Review queue (`/queue`). Open the **exact-ID record links** batch banner, scroll the sample (`<sample size>` pairs, seed shown), choose Approve for each, submit. Do the same for the **corroborated ownership** batch. Return to the board: Sunrise now **₹58.2 cr (13.9%)**, past the 10% mark, hidden exposure **+₹18.2 cr**.
 
----
+> Most links are routine: the PAN matches exactly, or two sources agree on ownership. Talos groups those into batches and draws a random sample from a seed shown on screen. The reviewer decides every pair in the sample, and one rejection fails the whole batch. Once approved, Exasol rebuilds the groups in SQL, and Sunrise crosses the 10% line.
 
-### [00:35 – 01:15] Beat 2: Deterministic Sampling & The 10% Large Exposure Line
-**Visual**:
-* Click on **Review Queue** (`/queue`).
-* Banner at top: `Exact-ID Record Links Batch (1,912 matches waiting)`. Click **[Review Sample Batch]**.
-* Cursor scrolls through the 96 seed-verified sample pairs showing explicit radio buttons `[✓ Approve] [✗ Reject]`.
-* Click **[Submit Batch Decision & Sign Audit Trail]**.
-* Banner 2: `Corroborated Ownership Edges Batch (3,540 edges)`. Click **[Review Sample Batch]** and submit approval.
-* Return to **Exposure Board** (`/board`).
-* Highlight the dynamic jump: Sunrise Group jumps from **₹40.00 cr** to **₹58.20 cr (13.86%)**.
-* Cursor points to the SVG gauge: the amber needle crosses the **10% Large Exposure Threshold**.
-* KPI Ribbon updates: `Hidden Exposure Unmasked: +₹18.20 cr`.
+### 1:15 – 1:55  The hard cases get a human
+**Screen:** Queue, individual cards. Open the Sunrise guarantee card whose book record has no PAN: side-by-side names, `<similarity>`, same pincode. Approve. Then the card where the book record carries **another company's PAN**: red conflict chip, tier T3. Reject.
 
-**Voiceover (Spoken)**:
-> *"Instead of reviewing 5,000 routine links one by one, Talos groups exact PAN and corroborated MCA registry edges into cryptographically bounded batches.  
-> Our risk officer inspects a seed-verified sample of pairs using explicit approve/reject radio buttons. One invalid pair fails the entire batch.  
-> When we approve the batches, Exasol recursively builds the connected group in SQL.  
-> Instantly, Sunrise Group expands to ₹58.20 crore. The amber needle crosses the 10% statutory threshold. Our bank is now officially carrying a Large Exposure that was previously invisible."*
+> For records with no ID, Talos scores name distance, phonetic match and pincode in the database and shows the evidence side by side. This card matches on name and pincode, and the reviewer approves it. This one is the trap: the record carries a PAN belonging to a different company. An ID that disagrees with the name is never trusted, and a rejection writes a permanent do-not-link entry to the audit log.
+
+### 1:55 – 2:35  The holding company
+**Screen:** Queue, the **Sunrise Industries → Sunrise Finvest** ownership card. The headline reads that approving moves the group from 18.0% to 26.7% and crosses the 25% limit. Approve. Board: **₹112.0 cr (26.7%)**, status **Limit breach**. Open the lineage page and show the ownership tree and the rows behind the figure.
+
+> Sunrise Industries owns all of a holding company, Sunrise Finvest, which already carries ₹36.4 crore of loans under its own group. Only a registry filing says who owns it. One approval merges the two groups, and Sunrise goes from ₹40 crore to ₹112 crore, over the ₹105 crore limit. Every rupee traces to a source row, the person who approved the link, and when.
+
+### 2:35 – 3:00  Prove it
+**Screen:** Audit (`/audit`). Click **Verify replay** on the latest run: the match badge with its hash. Close on the title card: *Talos, group exposure under RBI limits, computed inside Exasol.*
+
+> Each published run records the data versions, policy and code it used, plus a hash of its output. An auditor can replay any run and check the hash matches. The matching and grouping run in the database, and in this demo no model is involved in any decision.
 
 ---
 
-### [01:15 – 01:55] Beat 3: Human-in-the-Loop T1 Fuzzy Match & T3 Decoy Rejection
-**Visual**:
-* Navigate back to **Review Queue** (`/queue`).
-* Show Proposal Card 1: `P-REC-GTE-SUNRISE-TRUE` (Trade Guarantee of ₹17.40 cr). Side-by-side card shows missing PAN in book, but 94% name similarity and identical Nariman Point pincode. Click **[✓ Approve Link]**.
-* Notice HTMX updates the card inline with zero page refresh, swapping the header KPI ribbon out-of-band.
-* Show Proposal Card 2: `P-REC-GTE-SUNRISE-CONFLICT`. A decoy record carrying Kaveri Chemicals PAN with Sunrise name.
-* Highlight the red conflict chip. Click **[✗ Reject Link]**.
+## Part 2: 15-minute finals, likely questions
 
-**Voiceover (Spoken)**:
-> *"For facilities without statutory PANs, Talos calculates Jaccard token similarity and address distance in-database.  
-> In trade guarantees, we find a ₹17.40 crore facility with missing PAN, but matching registered address. Our approver confirms the link.  
-> Right below it is our planted decoy: a borrower carrying a Kaveri Chemicals PAN entered by mistake in branch operations. A naive fuzzy match would merge Kaveri Chemicals into Sunrise, creating a catastrophic false merge.  
-> Talos flags this as Tier 3 ID-Name conflict. Our reviewer rejects the link, writing an immutable DO-NOT-LINK barrier into the audit log."*
+**1. "HoldCo's ₹36.4 cr was already on your books. In what sense is it hidden?"**
+It was on the balance sheet, but under a different group, at 8.7% of capital. The limit applies to the group of connected counterparties (RBI/2018-19/196 para 5.2), so what was hidden was the link, not the loan. Reported 9.5% and 8.7% look fine separately and add up to 26.7% together. (Reported ₹40.0 cr to ₹112.0 cr is +₹72.0 cr for the group; ₹35.6 cr of that is the treasury and guarantee rows, and ₹36.4 cr is the holding company.)
 
----
+**2. "Why do this in Exasol rather than export to a graph database?"**
+Three reasons. The data is non-public borrower data, so it never leaves the database. Runs are reproducible as of a business date and a known-at time, which we implement with append-only event tables and the replay rule. And the heavy steps, blocking and label propagation, are set operations the engine parallelises. On the dev data blocking cuts 25,000 × 4,000 possible pairs to 731,543 candidates (a 99.27% reduction) while keeping 99.88% of the true pairs.
 
-### [01:55 – 02:35] Beat 4: The Holding Company Unmasking & 25% Regulatory Breach
-**Visual**:
-* In Review Queue, show Proposal Card 3: `P-OWN-SUNRISE-HOLDCO`.
-* Heading alert: `⚠ REGULATORY BREACH WARNING: Approving merges Sunrise Finvest Group into Sunrise Industries, pushing group exposure to 26.7% (Limit: 25.0%)`.
-* Click **[✓ Approve Link]**.
-* Immediately redirect to **Exposure Board** (`/board`).
-* Row 1: Sunrise Group is now **₹112.00 cr (26.67%)**.
-* The regulatory meter fill pulses bright red beyond the 25% limit line.
-* Status badge glows: **LIMIT BREACH**.
-* Click **[Lineage →]** (`/lineage/group/GRP-017`).
-* Show the recursive ownership tree rendered with Exasol's `CONNECT BY`, showing `Sunrise Finvest Private Limited` consolidated.
+**3. "Won't human review overwhelm credit officers?"**
+Review effort is spent where it matters. On the dev data 95.6% of tiered pairs are T0 or T1, and T0 is reviewed as a sample. The remaining cards are ordered by live impact, so ones that cross the 25% limit or the 10% line come first. We report reviewer load and are open that the sample on dev is large (DEV-36); the sample percentage is a policy value, not code.
 
-**Voiceover (Spoken)**:
-> *"Here is the critical discovery: Sunrise Industries secretly owns 100% of an unlisted holding vehicle, Sunrise Finvest.  
-> That holding vehicle was already on our balance sheet for ₹36.40 crore, but reported under a completely separate group code.  
-> When we approve the parent-child registry link, Exasol dissolves the boundary and merges both groups.  
-> Sunrise Group explodes to ₹112.00 crore—over 26.6% of our capital base. The regulatory limit is officially breached.  
-> In our Lineage screen, the Chief Risk Officer can inspect the full recursive ownership hierarchy and trace every single rupee back to individual loan contracts."*
+**4. "How do you know the matching is accurate?"**
+The generator plants known cases (decoys, wrong-PAN records, hidden parents) and writes the truth to tables the pipeline cannot read. `talos eval` scores against it. On dev: precision 1.00, recall 0.998, 12 of 12 wrong-ID records caught, 0 of 30 decoys merged, 6 of 6 hidden breaches found, 0 false breaches. Thresholds are tuned on dev only and frozen before the unseen test set is generated; the test result goes in the README whatever it is. Say plainly that the data is synthetic and cleaner than a real registry (DEV-17).
 
----
+**5. "Where does an LLM fit?"**
+It is optional and not used in this demo. The grey band (T2) can be sent to a model through a provider-swappable function, but the model never writes to the database, and a model verdict can only demote a pair to a human, never approve it. With the default stub provider, T2 pairs stay in the queue marked "no model verdict".
 
-### [02:35 – 03:00] Beat 5: Deterministic Audit Trail & Exasol In-DB Supremacy
-**Visual**:
-* Click on **Audit Trail** (`/audit`).
-* Show table of immutable execution runs with SHA-256 output hashes.
-* Click **[⚡ Verify Replay]** on the latest run.
-* Inline badge switches to: `✓ REPLAY MATCH • a1b2c3d4e5f6... (100% Deterministic)`.
-* Transition to final closing title card:  
-  **TALOS: Deterministic Group Risk Engine for Exasol (Track 01)**  
-  *Zero External APIs • 100% In-Database SQL • Paisa-Exact Regulatory Governance*
-
-**Voiceover (Spoken)**:
-> *"Every single calculation, candidate blocking path, and human decision is cryptographically signed.  
-> With one click, an auditor can trigger an in-process replay that re-runs the entire pipeline and verifies the output hash bit-for-bit.  
-> Zero sensitive credit data leaves the database. Zero black-box LLM hallucinations.  
-> Talos turns Exasol into an impenetrable fortress for regulatory compliance. Thank you."*
-
----
-
-# Part 2: 15-Minute Live Finals Q&A Defense Guide
-
-### Question 1 (Regulatory Focus):
-**Judge**: *"HoldCo's ₹36.4 cr was already on your loan book under its own name, so in what sense is that exposure 'hidden'?"*
-
-**Architect Response (Verbatim)**:
-> *"The exposure was not hidden from the general ledger—it was hidden from the **Group Perimeter Boundary**.  
-> Under RBI LEF Master Circular §5.1, concentration limits apply to connected borrower groups, not individual legal entities. The bank knew about the ₹36.40 crore loan, but classified it under an unrelated standalone group code with 8.67% utilisation.  
-> By missing the MCA holding company link, the bank's reported credit concentration for Sunrise was understated by ₹72.00 crore, concealing a catastrophic statutory limit breach. In regulatory compliance, an aggregation perimeter error is an illegal breach."*
-
----
-
-### Question 2 (Exasol Performance & Scalability):
-**Judge**: *"Why do entity resolution and graph traversal inside Exasol instead of exporting to Neo4j or running Spark GraphX?"*
-
-**Architect Response (Verbatim)**:
-> *"Three reasons: Security, Bitemporality, and Transactional Atomicity.  
-> First, exporting 250,000 banking records with unmasked PANs and credit facilities to external graph databases breaks banking secrecy and RBI data residency mandates.  
-> Second, external graph engines lack native bitemporal transaction support (`business_date` vs `known_at`). Exasol's columnar engine allows us to query exactly what the credit committee knew as of 5:00 PM on the quarter-end closing date.  
-> Third, Exasol's massively parallel columnar execution solves our blocking indices via parallel hash joins in milliseconds—giving us 99.96% candidate reduction purely in SQL."*
-
----
-
-### Question 3 (Human Reviewer Feasibility):
-**Judge**: *"Banks process hundreds of thousands of borrowers. Won't human-in-the-loop review overwhelm your credit officers?"*
-
-**Architect Response (Verbatim)**:
-> *"No, because of our two-tier triage architecture:  
-> Over 95% of edges fall into Tier 0 (exact PAN/CIN matches) or corroborated registry batches. Using our integer-based sampling protocol with strict 2% and 5% sample rates, a reviewer only inspects 70 to 90 pairs to approve an entire batch of 3,500 edges.  
-> For the remaining individual cards, our live regulatory impact ranking orders proposals by `crosses_limit DESC, crosses_le DESC, rupee_impact DESC`. The Chief Risk Officer only inspects the top 20 cards that actually threaten capital limits, keeping daily review time under 15 minutes."*
+**6. "What can't it do?"**
+It does not price credit risk or credit-risk mitigation (collateral carries zero exposure by policy). It reads one registry feed. JV rulings need a human. Python UDFs failed the Nano probe, so label propagation is plain SQL, which is correct but not the fastest option at very large scale.
