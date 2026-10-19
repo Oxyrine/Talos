@@ -26,14 +26,14 @@
   "llm_share": 0.0426,
   "reviewer_load_per_1000_entities": 1200.75,
   "pipeline_runtime_seconds": {
-    "30_31_blocking": 5.46,
-    "judge_t2": 53.78,
-    "20_id_tokens_exact": 1.62,
-    "40_score_tier": 2.99,
-    "41_apply_verdicts": 0.15,
-    "70_propose_record_links": 2.71,
-    "10_standardise": 2.19,
-    "71_propose_edges": 1.13
+    "30_31_blocking": 7.68,
+    "judge_t2": 87.15,
+    "20_id_tokens_exact": 1.09,
+    "40_score_tier": 3.65,
+    "41_apply_verdicts": 0.22,
+    "70_propose_record_links": 3.73,
+    "10_standardise": 1.19,
+    "71_propose_edges": 1.29
   },
   "understated_exposure_before_inr": 2467113800.0,
   "understated_exposure_after_inr": 0.0,
