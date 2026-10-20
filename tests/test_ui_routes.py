@@ -310,3 +310,13 @@ def test_batch_page_offers_approve_all_through_a_csp_safe_script(approver_client
     assert "script-src 'self'" in page.headers["Content-Security-Policy"]
     script = approver_client.get("/static/batch.js")
     assert script.status_code == 200 and "APPROVE" in script.text
+
+
+def test_ownership_batch_labels_holder_stake_and_cin(approver_client):
+    from ui.mock_data import get_mock_queue_data
+
+    ids = {b["batch_kind"]: b["batch_id"] for b in get_mock_queue_data()["batches"]}
+    own = approver_client.get(f"/queue/batch/{ids['OWNERSHIP']}").text
+    assert "Holder (parent)" in own and "Held (subsidiary)" in own and "Stake held:" in own
+    rec = approver_client.get(f"/queue/batch/{ids['RECORD_LINK']}").text
+    assert "Lending Book Entity" in rec and "Stake held:" not in rec

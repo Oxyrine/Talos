@@ -57,8 +57,8 @@ CREATE OR REPLACE VIEW REPORT.V_GROUP_EXPOSURE AS
 -- One row per group of a run:
 --   E:/U: groups from GOV.RUN_MEMBERSHIP (U: = a lone unlinked record, flagged UNRESOLVED);
 --   R:<reported_group> rows for reported groups that no Talos group carries yet ("not linked
---   yet": reported figure only, limit_exposure NULL). A standalone reported row (SA:, C:)
---   drops off once its record is linked.
+--   yet": reported figure only, limit_exposure NULL). A reported row drops off once its records
+--   are linked: a standalone SA:/C: row when its record is, a group code when all its customers are.
 -- The reported figure of a Talos group is that of its head's loan-book group code (the
 -- spreadsheet view of the head). A code is shown on one Talos group only: the largest whose
 -- head carries it. Smaller groups carrying the same code show 0 reported and 0 hidden,
@@ -123,6 +123,18 @@ code_name AS (
   WHERE c.group_code IS NOT NULL
   QUALIFY ROW_NUMBER() OVER (PARTITION BY c.group_code ORDER BY COALESCE(la.amt, 0) DESC, c.cust_id) = 1
 ),
+code_link AS (
+  -- per run and loan-book group code: customers with exposure, and how many of them sit in a
+  -- Talos (E:) group. When all of them do, the reported group has been resolved by linking.
+  SELECT m.run_id, c.group_code AS reported_group, COUNT(*) AS customers,
+         SUM(CASE WHEN m.in_talos = 1 THEN 1 ELSE 0 END) AS linked
+  FROM los_cust c
+  JOIN (SELECT run_id, rec_key, MAX(CASE WHEN group_key LIKE 'E:%' THEN 1 ELSE 0 END) AS in_talos
+        FROM GOV.RUN_OUTPUT WHERE membership_kind = 'MEMBER' AND rec_key LIKE 'LOS:%'
+        GROUP BY run_id, rec_key) m ON m.rec_key = 'LOS:' || c.cust_id
+  WHERE c.group_code IS NOT NULL
+  GROUP BY m.run_id, c.group_code
+),
 sa_name AS (
   SELECT 'SA:TSY:' || issuer_ref AS reported_group, MAX(issuer_name) AS name FROM RAW_TREASURY.HOLDING GROUP BY issuer_ref
   UNION ALL
@@ -154,6 +166,9 @@ base AS (
   LEFT JOIN los_cust lc ON rr.reported_group = 'C:' || lc.cust_id
   LEFT JOIN sa_name sn ON sn.reported_group = rr.reported_group
   WHERE NOT EXISTS (SELECT 1 FROM talos t WHERE t.run_id = rr.run_id AND t.reported_group = rr.reported_group)
+    -- a group whose customers are all linked into Talos groups (e.g. merged by an ownership link)
+    AND NOT EXISTS (SELECT 1 FROM code_link cl
+                    WHERE cl.run_id = rr.run_id AND cl.reported_group = rr.reported_group AND cl.linked = cl.customers)
     -- a standalone reported row (SA: treasury/guarantee, C: customer without a group code)
     -- drops off once its record is linked into a Talos group
     AND NOT EXISTS (SELECT 1 FROM GOV.RUN_OUTPUT o

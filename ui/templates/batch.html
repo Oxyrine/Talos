@@ -3,6 +3,7 @@
 {% block title %}Batch Review — {{ batch.title }}{% endblock %}
 
 {% block content %}
+{% set is_own = batch.batch_kind == 'OWNERSHIP' %}
 <div class="page-header">
   <div>
     <div class="eyebrow">02 / BATCH REVIEW</div>
@@ -42,9 +43,9 @@
       <tr>
         <th>#</th>
         <th>Proposal ID</th>
-        <th>Lending Book Entity</th>
+        <th>{% if is_own %}Holder (parent){% else %}Lending Book Entity{% endif %}</th>
         <th>Source</th>
-        <th>Corporate Registry Entity</th>
+        <th>{% if is_own %}Held (subsidiary){% else %}Corporate Registry Entity{% endif %}</th>
         <th>Explicit Verdict (Radio)</th>
       </tr>
     </thead>
@@ -55,12 +56,12 @@
         <td><code class="id-chip id-chip-missing">{{ item.proposal_id }}</code></td>
         <td>
           <strong>{{ item.name_a }}</strong><br>
-          <span class="text-xs text-muted font-mono">ID: {{ item.pan_a }}</span>
+          <span class="text-xs text-muted font-mono">{% if is_own %}Stake held: {% else %}ID: {% endif %}{{ item.pan_a }}</span>
         </td>
         <td><span class="badge badge-muted">{{ item.source_a }}</span></td>
         <td>
           <strong>{{ item.name_b }}</strong><br>
-          <span class="text-xs text-muted font-mono">ID: {{ item.pan_b }}</span>
+          <span class="text-xs text-muted font-mono">{% if is_own %}CIN: {% else %}ID: {% endif %}{{ item.pan_b }}</span>
         </td>
         <td>
           <div class="radio-verdict-group">

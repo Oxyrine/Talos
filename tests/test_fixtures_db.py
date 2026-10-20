@@ -286,3 +286,30 @@ def test_concurrent_publishes_match_sequential(fx):
     for i, res in sorted(results.items()):
         assert not isinstance(res, Exception), f"run {i} failed: {res}"
         assert (res.status, res.output_hash, res.row_count) == ("OK", expected.output_hash, expected.row_count), i
+
+
+def board_rows(run_id: str) -> dict[str, dict]:
+    conn = connect("sys")
+    try:
+        rows = conn.execute(
+            "SELECT group_key, reported_group, reported_exposure, limit_exposure, hidden_exposure, group_flags "
+            "FROM REPORT.V_GROUP_EXPOSURE WHERE run_id = {r}",
+            query_params={"r": run_id},
+        ).fetchall()
+    finally:
+        conn.close()
+    return {r["group_key"]: r for r in rows}
+
+
+def test_board_shows_a_reported_code_on_one_group_and_drops_fully_linked_codes(main_run):
+    rows = board_rows(main_run.run_id)
+    # a code is the head's loan-book group code, shown with its reported figure
+    assert rows[E("DIA_P")]["reported_group"] == "FXG-DIA"
+    assert Decimal(str(rows[E("DIA_P")]["reported_exposure"])) == Decimal(100)
+    # a code carried by two Talos groups is shown on the larger one; the other shows 0 and no hidden delta
+    big, small = rows[E("MIN_2")], rows[E("MIN_1")]
+    assert Decimal(str(big["reported_exposure"])) == Decimal(150) and Decimal(str(small["reported_exposure"])) == 0
+    assert Decimal(str(small["hidden_exposure"])) == 0
+    # FXG-B belongs to a diamond member whose customers are all linked into a Talos group: no "not linked yet" row
+    assert "R:FXG-B" not in rows
+
