@@ -72,11 +72,13 @@ def _current_business_date() -> str:
 # -------------------------------------------------------------------------
 # Screen 1: Exposure Board
 # -------------------------------------------------------------------------
-def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidden", view: str = "talos") -> dict[str, Any]:
+def get_board_data(
+    business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidden", view: str = "talos", q: str = ""
+) -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import get_mock_board_data
 
-        return get_mock_board_data(business_date=business_date, sort=sort, view=view)
+        return get_mock_board_data(business_date=business_date, sort=sort, view=view, q=q)
 
     conn = _get_reader_connection()
     try:
@@ -157,6 +159,9 @@ def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidd
         else:
             groups.sort(key=lambda g: (g["limit_exposure"] or Decimal("0"), g["reported_exposure"]), reverse=True)
         pending = [g for g in groups if g["limit_exposure"] is None]
+        # Search narrows the register only; the tiles and the pending count stay book-wide.
+        needle = q.strip().lower()
+        shown = [g for g in groups if needle in g["group_name"].lower() or needle in g["group_key"].lower()] if needle else groups
 
         return {
             "run_id": run_id,
@@ -169,8 +174,10 @@ def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidd
                 "unassigned_exposure": unassigned,
                 "capital_base": groups[0]["capital_base"] if groups else None,
             },
-            "groups": groups[:BOARD_ROWS],
+            "groups": shown[:BOARD_ROWS],
             "group_count": len(groups),
+            "match_count": len(shown),
+            "q": q.strip(),
             "pending_count": len(pending),
             "first_pending_name": pending[0]["group_name"] if pending else None,
             "unlinked_records": int(unlinked[0]["n"] or 0) if unlinked else 0,
@@ -182,11 +189,11 @@ def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidd
 # -------------------------------------------------------------------------
 # Screen 2: Review Queue
 # -------------------------------------------------------------------------
-def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str = "") -> dict[str, Any]:
+def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str = "", q: str = "") -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import get_mock_queue_data
 
-        return get_mock_queue_data(page=page, per_page=per_page, tier=tier, kind=kind)
+        return get_mock_queue_data(page=page, per_page=per_page, tier=tier, kind=kind, q=q)
 
     conn = _get_reader_connection()
     try:
@@ -222,6 +229,12 @@ def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str 
         if kind:
             clauses.append("kind = {kind}")
             params["kind"] = kind
+        if q.strip():
+            # Free-text search over the group name and the evidence (names, places). LIKE
+            # wildcards in the term are escaped so it matches literally.
+            like = "%" + q.strip().upper().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            clauses.append("(UPPER(group_name) LIKE {q} ESCAPE '\\' OR UPPER(evidence_json) LIKE {q} ESCAPE '\\')")
+            params["q"] = like
         where_sql = " AND ".join(clauses)
 
         total_items = int(conn.execute(

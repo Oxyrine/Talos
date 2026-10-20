@@ -27,9 +27,13 @@
       Any rejection fails the entire batch to preserve zero-false-merge integrity.
     </div>
   </div>
+  <div class="toolbar-group">
+    <button type="button" id="approve-all" class="btn btn-secondary" form="batch-form">Approve all in this sample</button>
+    <span id="verdict-status" class="text-muted text-xs" role="status" aria-live="polite"></span>
+  </div>
 </div>
 
-<form method="POST" action="/queue/batch/{{ batch.batch_id }}" class="table-card">
+<form id="batch-form" method="POST" action="/queue/batch/{{ batch.batch_id }}" class="table-card">
   <input type="hidden" name="seed" value="{{ batch.seed }}">
   <input type="hidden" name="token" value="{{ batch.token }}">
 
@@ -99,4 +103,5 @@
     </div>
   </div>
 </form>
+<script src="/static/batch.js?v=1" defer></script>
 {% endblock %}

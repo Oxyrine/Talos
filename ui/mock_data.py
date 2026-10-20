@@ -50,7 +50,7 @@ def reset_mock_state() -> None:
 # -------------------------------------------------------------------------
 # Board Data Generation
 # -------------------------------------------------------------------------
-def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden", view: str = "talos") -> dict[str, Any]:
+def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden", view: str = "talos", q: str = "") -> dict[str, Any]:
     state = get_mock_state()
 
     # Sunrise Group Metrics across the 5 steps
@@ -178,7 +178,15 @@ def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden",
     else:
         groups.sort(key=lambda g: g["limit_exposure"] or Decimal("0"), reverse=True)
 
+    needle = q.strip().lower()
+    all_count = len(groups)
+    if needle:
+        groups = [g for g in groups if needle in g["group_name"].lower() or needle in g["group_key"].lower()]
+
     return {
+        "group_count": all_count,
+        "match_count": len(groups),
+        "q": q.strip(),
         "run_id": f"R-20261011120000-step{state.step}",
         "business_date": business_date,
         "known_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
@@ -195,7 +203,7 @@ def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden",
 # -------------------------------------------------------------------------
 # Proposal Queue Data Generation
 # -------------------------------------------------------------------------
-def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str = "") -> dict[str, Any]:
+def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str = "", q: str = "") -> dict[str, Any]:
     state = get_mock_state()
 
     # Active batches (disappear when approved)
@@ -360,6 +368,9 @@ def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind:
         filtered = [c for c in filtered if c["tier"] == tier]
     if kind:
         filtered = [c for c in filtered if c["kind"] == kind]
+    if q.strip():
+        needle = q.strip().lower()
+        filtered = [c for c in filtered if needle in (c["group_name"] + " " + c.get("headline", "") + " " + c["evidence_json"]).lower()]
 
     # Rank: crosses_limit DESC, crosses_le DESC, rupee_impact DESC
     filtered.sort(key=lambda c: (c["crosses_limit"], c["crosses_le"], c["rupee_impact"]), reverse=True)

@@ -49,11 +49,12 @@
   </aside>
 </div>
 <section class="exposure-section" aria-labelledby="groups-heading">
-  <div class="section-heading"><div><div class="eyebrow">THE WORKING REGISTER</div><h2 id="groups-heading">Exposure register <span class="count-badge">{{ group_count }}</span></h2></div><a href="/lineage/rows?bd={{ bd }}" class="text-link">All source rows <span aria-hidden="true">↗</span></a></div>
+  <div class="section-heading"><div><div class="eyebrow">THE WORKING REGISTER</div><h2 id="groups-heading">Exposure register <span class="count-badge">{% if q %}{{ board.match_count | default(0) }} of {% endif %}{{ group_count }}</span></h2></div><a href="/lineage/rows?bd={{ bd }}" class="text-link">All source rows <span aria-hidden="true">↗</span></a></div>
   <div class="table-card board-table-card">
     <div class="table-toolbar">
       <div class="comparison-legend"><span class="legend-dot"></span> Reported <span class="text-muted">→</span> Resolved</div>
-      <div class="toolbar-group sort-controls"><span class="control-label">SORT</span>{% for value, label in [('hidden', 'Hidden delta'), ('util', 'Utilisation'), ('exposure', 'Exposure')] %}<a href="/board?sort={{ value }}&bd={{ bd }}&view={{ view }}" class="sort-link {% if sort == value %}is-selected{% endif %}" {% if sort == value %}aria-current="true"{% endif %}>{{ label }}{% if sort == value %}<span aria-hidden="true">↓</span>{% endif %}</a>{% endfor %}</div>
+      <form method="get" action="/board" class="toolbar-group board-search" role="search"><input type="hidden" name="sort" value="{{ sort }}"><input type="hidden" name="bd" value="{{ bd }}"><input type="hidden" name="view" value="{{ view }}"><label class="control-label" for="board-q">FIND</label><input id="board-q" class="form-input" type="search" name="q" value="{{ q }}" maxlength="80" placeholder="Group or company name" autocomplete="off"><button type="submit" class="btn btn-secondary btn-sm">Search</button>{% if q %}<a href="/board?sort={{ sort }}&bd={{ bd }}&view={{ view }}" class="text-link">Clear</a>{% endif %}</form>
+      <div class="toolbar-group sort-controls"><span class="control-label">SORT</span>{% for value, label in [('hidden', 'Hidden delta'), ('util', 'Utilisation'), ('exposure', 'Exposure')] %}<a href="/board?sort={{ value }}&bd={{ bd }}&view={{ view }}&q={{ q | urlencode }}" class="sort-link {% if sort == value %}is-selected{% endif %}" {% if sort == value %}aria-current="true"{% endif %}>{{ label }}{% if sort == value %}<span aria-hidden="true">↓</span>{% endif %}</a>{% endfor %}</div>
     </div>
     <div class="table-scroll" role="region" aria-label="Group exposure table" tabindex="0">
       <table class="data-table exposure-table">

@@ -206,3 +206,40 @@ def test_queue_shows_live_impact_for_cards_filed_before_linking(monkeypatch):
     }
     use(monkeypatch, {"GROUP BY batch_id": [], "SELECT COUNT(*)": [{"c": 1}], "LIMIT": [card]})
     assert queries.get_queue_data()["proposals"][0]["rupee_impact"] == Decimal("364000000")
+
+
+def test_board_search_narrows_the_register_but_not_the_tiles(monkeypatch):
+    def group(key, name, limit, reported):
+        return {
+            "group_key": key, "group_name": name, "head_entity_key": key, "member_count": 1,
+            "reported_exposure": Decimal(reported), "limit_exposure": None if limit is None else Decimal(limit),
+            "capital_base": Decimal("4200000000"), "utilisation_pct": Decimal("1"), "is_large": False,
+            "is_breach": False, "group_flags": "", "hidden_exposure": Decimal("0"), "headroom": Decimal("0"),
+        }
+
+    use(monkeypatch, {
+        "V_LATEST_RUN": [{"run_id": "R-1", "known_at": "x"}],
+        "SUM(limit_exposure)": [{"n": 0, "amt": None}],
+        "V_GROUP_EXPOSURE": [
+            group("R:GRP-A", "Cochin Group Limited", None, "760000000"),
+            group("R:GRP-NWDCS", "Sunrise Indu5tries Limited", None, "400000000"),
+            group("R:GRP-WMPCS", "Sunrise Holdings Ltd", None, "364000000"),
+        ],
+    })
+    board = queries.get_board_data(q=" sunrise ")
+    assert [g["group_name"] for g in board["groups"]] == ["Sunrise Indu5tries Limited", "Sunrise Holdings Ltd"]
+    assert (board["group_count"], board["match_count"], board["pending_count"]) == (3, 2, 3)
+    assert board["q"] == "sunrise"
+    # a group key matches too
+    assert [g["group_key"] for g in queries.get_board_data(q="grp-a")["groups"]] == ["R:GRP-A"]
+
+
+def test_queue_search_is_a_parameterised_case_insensitive_literal_match(monkeypatch):
+    conn = use(monkeypatch, {"GROUP BY batch_id": [], "SELECT COUNT(*)": [{"c": 0}], "LIMIT": []})
+    captured = []
+    real = conn.execute
+    conn.execute = lambda sql, query_params=None: (captured.append((sql, query_params)), real(sql, query_params))[1]
+    queries.get_queue_data(q="Sun_rise 50%")
+    sql, params = next((s, p) for s, p in captured if "LIKE {q}" in s)
+    assert "UPPER(group_name) LIKE {q}" in sql and "UPPER(evidence_json) LIKE {q}" in sql
+    assert params["q"] == r"%SUN\_RISE 50\%%"  # wildcards in the term are escaped, not interpreted

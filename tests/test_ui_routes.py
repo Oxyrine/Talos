@@ -288,3 +288,25 @@ def test_batch_submit_accepts_more_than_1000_pairs(approver_client, monkeypatch)
 def test_mock_mode_marks_every_page_as_simulated(approver_client):
     for path in ("/board", "/queue", "/pipeline"):
         assert "Simulated data." in approver_client.get(path).text, path
+
+
+def test_search_boxes_filter_the_mock_board_and_queue(approver_client):
+    board = approver_client.get("/board?q=sunrise").text
+    assert "Sunrise Industries Limited" in board and "Kaveri Chemicals Group" not in board
+    assert 'name="q" value="sunrise"' in board
+    queue = approver_client.get("/queue?q=bhopal").text
+    assert "Bhopal Agro Foods" in queue and "Sunrise Holdings Limited" not in queue
+    assert "No pending proposals match" in approver_client.get("/queue?q=nothing-matches-this").text
+
+
+def test_batch_page_offers_approve_all_through_a_csp_safe_script(approver_client):
+    from ui.mock_data import get_mock_queue_data
+
+    batch_id = get_mock_queue_data()["batches"][0]["batch_id"]
+    page = approver_client.get(f"/queue/batch/{batch_id}")
+    assert page.status_code == 200
+    assert 'id="approve-all"' in page.text and 'form="batch-form"' in page.text and 'id="batch-form"' in page.text
+    assert '<script src="/static/batch.js' in page.text and "<script>" not in page.text  # no inline script
+    assert "script-src 'self'" in page.headers["Content-Security-Policy"]
+    script = approver_client.get("/static/batch.js")
+    assert script.status_code == 200 and "APPROVE" in script.text

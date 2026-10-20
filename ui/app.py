@@ -252,13 +252,15 @@ async def exposure_board(
     sort: str = Query("hidden", pattern="^(hidden|util|exposure)$"),
     view: str = Query("talos", pattern="^(talos|reported)$"),
     bd: str = Query("2026-09-30"),
+    q: str = Query("", max_length=80),
 ):
-    board = get_board_data(business_date=bd, sort=sort, view=view)
+    board = get_board_data(business_date=bd, sort=sort, view=view, q=q)
     ctx = {
         "user": user,
         "is_mock": is_mock_mode(),
         "active_nav": "board",
         "board": board,
+        "q": q.strip(),
         "sort": sort,
         "view": view,
         "bd": bd,
@@ -277,8 +279,9 @@ async def review_queue(
     per_page: int = Query(25, ge=5, le=100),
     tier: str = Query(""),
     kind: str = Query(""),
+    q: str = Query("", max_length=80),
 ):
-    queue = get_queue_data(page=page, per_page=per_page, tier=tier, kind=kind)
+    queue = get_queue_data(page=page, per_page=per_page, tier=tier, kind=kind, q=q)
     ctx = {
         "user": user,
         "is_mock": is_mock_mode(),
@@ -286,6 +289,7 @@ async def review_queue(
         "queue": queue,
         "tier": tier,
         "kind": kind,
+        "q": q.strip(),
     }
     return templates.TemplateResponse(request=request, name="queue.html", context=ctx)
 
