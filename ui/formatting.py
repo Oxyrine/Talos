@@ -125,9 +125,11 @@ def _normalise_pipeline_evidence(ev: dict[str, Any]) -> None:
             "pan": word,
             "address": ", ".join(p for p in (ev.get("city_a"), ev.get("state_a"), ev.get("pincode_a")) if p),
         }
+        cin = str(ev.get("entity_key") or "").removeprefix("E:")
         ev["registry"] = {
             "entity_name": ev.get("name_b_raw"),
-            "pan": word,
+            # the registry side is identified by its CIN; evidence carries no raw PAN
+            "pan": f"CIN {cin}" if cin else word,
             "address": ", ".join(p for p in (ev.get("city_b"), ev.get("state_b"), ev.get("pincode_b")) if p),
         }
     elif ev.get("kind") == "OWNERSHIP" and not book:

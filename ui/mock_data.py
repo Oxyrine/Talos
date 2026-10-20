@@ -50,7 +50,7 @@ def reset_mock_state() -> None:
 # -------------------------------------------------------------------------
 # Board Data Generation
 # -------------------------------------------------------------------------
-def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden", view: str = "talos") -> dict[str, Any]:
+def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden", view: str = "talos", q: str = "") -> dict[str, Any]:
     state = get_mock_state()
 
     # Sunrise Group Metrics across the 5 steps
@@ -105,9 +105,9 @@ def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden",
     groups = [
         {
             "group_key": "E:L17110MH2018PLC000017",
-            "group_name": "Sunrise Industries Group",
+            "group_name": "Sunrise Industries Limited",
             "head_entity_key": "E:L17110MH2018PLC000017",
-            "member_count": 8 if state.step >= 4 else (6 if state.step >= 2 else 1),
+            "member_count": 9 if state.step >= 4 else (7 if state.step >= 2 else 1),
             "reported_exposure": sunrise_reported,
             "limit_exposure": sunrise_talos,
             "hidden_exposure": sunrise_hidden,
@@ -150,17 +150,18 @@ def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden",
         },
     ]
 
-    # HoldCo group appears at Step 2 and merges into Sunrise at Step 4
+    # The holding group (Sunrise Holdings, which owns Sunrise Finvest) forms at Step 2 and
+    # merges into Sunrise at Step 4. The loan book already reports it on its own group code.
     if 2 <= state.step < 4:
         holdco_exp = Decimal("364000000.00")
         groups.append({
-            "group_key": "E:U65990MH2020PTC000999",
-            "group_name": "Sunrise Finvest Group",
-            "head_entity_key": "E:U65990MH2020PTC000999",
-            "member_count": 3,
-            "reported_exposure": Decimal("0.00"),  # Reported under different map
+            "group_key": "E:L65990MH2020PLC000999",
+            "group_name": "Sunrise Holdings Limited",
+            "head_entity_key": "E:L65990MH2020PLC000999",
+            "member_count": 2,
+            "reported_exposure": holdco_exp,
             "limit_exposure": holdco_exp,
-            "hidden_exposure": holdco_exp,
+            "hidden_exposure": Decimal("0.00"),
             "capital_base": CAPITAL_BASE,
             "utilisation_pct": (holdco_exp / CAPITAL_BASE) * Decimal("100"),
             "is_large": False,
@@ -168,7 +169,6 @@ def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden",
             "group_flags": "",
             "headroom": GROUP_LIMIT_AMT - holdco_exp,
         })
-        hidden_exposure_total += holdco_exp
 
     # Sorting
     if sort == "util":
@@ -178,7 +178,15 @@ def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden",
     else:
         groups.sort(key=lambda g: g["limit_exposure"] or Decimal("0"), reverse=True)
 
+    needle = q.strip().lower()
+    all_count = len(groups)
+    if needle:
+        groups = [g for g in groups if needle in g["group_name"].lower() or needle in g["group_key"].lower()]
+
     return {
+        "group_count": all_count,
+        "match_count": len(groups),
+        "q": q.strip(),
         "run_id": f"R-20261011120000-step{state.step}",
         "business_date": business_date,
         "known_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
@@ -195,7 +203,7 @@ def get_mock_board_data(business_date: str = "2026-09-30", sort: str = "hidden",
 # -------------------------------------------------------------------------
 # Proposal Queue Data Generation
 # -------------------------------------------------------------------------
-def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str = "") -> dict[str, Any]:
+def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str = "", q: str = "") -> dict[str, Any]:
     state = get_mock_state()
 
     # Active batches (disappear when approved)
@@ -205,17 +213,17 @@ def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind:
             "batch_id": "B-REC-2026101101",
             "batch_kind": "RECORD_LINK",
             "title": "Exact-ID Record Links Batch",
-            "desc": "1,912 Exact-ID matches waiting. Review a representative sample of 96 to approve.",
-            "total_count": 1912,
-            "sample_count": 96,
+            "desc": "20,288 Exact-ID matches waiting. Review a representative sample of 1,015 to approve.",
+            "total_count": 20288,
+            "sample_count": 1015,
         })
     if state.step < 2 and (not kind or kind == "OWNERSHIP"):
         batches.append({
             "batch_id": "B-OWN-2026101101",
             "batch_kind": "OWNERSHIP",
             "title": "Corroborated Ownership Edges Batch",
-            "desc": "3,540 routine registry ownership edges corroborated by LOS customer codes. Review sample of 71 to approve.",
-            "total_count": 3540,
+            "desc": "3,535 routine registry ownership edges corroborated by LOS customer codes. Review sample of 71 to approve.",
+            "total_count": 3535,
             "sample_count": 71,
         })
 
@@ -228,7 +236,7 @@ def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind:
         all_cards.append({
             "proposal_id": p_own,
             "kind": "OWNERSHIP",
-            "subject_key": "CONTROL:E:L17110MH2018PLC000017>E:U65990MH2020PTC000999",
+            "subject_key": "CONTROL:E:L17110MH2018PLC000017>E:L65990MH2020PLC000999",
             "tier": "T1",
             "tier_reason": "REGISTRY_PARENT_EDGE",
             "rupee_impact": Decimal("364000000.00"),
@@ -236,16 +244,16 @@ def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind:
             "crosses_le": 0,
             "group_before_pct": Decimal("18.00") if state.step >= 3 else Decimal("13.86"),
             "group_after_pct": Decimal("26.67"),
-            "group_name": "Sunrise Industries Group",
-            "headline": "Approving moves Sunrise Industries Group from 18.0% to 26.7% of capital (crosses 25% limit) by acquiring Sunrise Finvest group (₹36.40 cr).",
+            "group_name": "Sunrise Industries Limited",
+            "headline": "Approving moves Sunrise Industries from 18.0% to 26.7% of capital (crosses 25% limit) by connecting the Sunrise Holdings group (₹36.40 cr).",
             "evidence_json": json.dumps({
                 "book": {
                     "source": "REGISTRY",
                     "holder_cin": "L17110MH2018PLC000017",
                     "holder_name": "Sunrise Industries Limited",
-                    "held_cin": "U65990MH2020PTC000999",
-                    "held_name": "Sunrise Finvest Private Limited",
-                    "stake_pct": "100.00%",
+                    "held_cin": "L65990MH2020PLC000999",
+                    "held_name": "Sunrise Holdings Limited",
+                    "stake_pct": "74.00%",
                     "control_flag": True,
                 },
                 "registry": {
@@ -271,12 +279,12 @@ def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind:
             "crosses_le": 1 if state.step == 2 else 0,
             "group_before_pct": Decimal("13.86"),
             "group_after_pct": Decimal("18.00"),
-            "group_name": "Sunrise Industries Group",
-            "headline": "Approving consolidates Sunrise Guarantee book (+₹17.40 cr) into Sunrise Industries Group.",
+            "group_name": "Sunrise Industries Limited",
+            "headline": "Approving consolidates the Sunrise treasury and guarantee records (+₹17.40 cr) into Sunrise Industries.",
             "evidence_json": json.dumps({
                 "book": {
                     "source": "GTE",
-                    "raw_name": "Sunrise Inds Ltd (Mumbai Br)",
+                    "raw_name": "Sunrise Industries Ltd",
                     "std_name": "SUNRISE INDUSTRIES",
                     "address": "42 Nariman Point, Mumbai - 400021",
                     "pan": None,
@@ -291,7 +299,7 @@ def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind:
                     "pincode": "400021",
                 },
                 "id_status": {"PAN": "missing", "CIN": "missing"},
-                "metrics": {"name_sim": 0.94, "pin_match": True, "state_match": True},
+                "metrics": {"name_sim": 1.00, "pin_match": True, "state_match": True},
             }),
         })
 
@@ -301,7 +309,7 @@ def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind:
         all_cards.append({
             "proposal_id": p_t3_gte,
             "kind": "RECORD_LINK",
-            "subject_key": "GTE:GTE-009841>E:U24100GJ2015PLC000042",
+            "subject_key": "GTE:GTE-P-000004>E:U15400MP2011PTC000042",
             "tier": "T3",
             "tier_reason": "ID_NAME_CONFLICT",
             "rupee_impact": Decimal("174000000.00"),
@@ -309,24 +317,24 @@ def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind:
             "crosses_le": 0,
             "group_before_pct": Decimal("9.05"),
             "group_after_pct": Decimal("13.19"),
-            "group_name": "Kaveri Chemicals Group",
-            "headline": "CAUTION: Keyed with Kaveri Chemicals PAN, but borrower name is Sunrise Inds Ltd. Reject false link.",
+            "group_name": "Bhopal Agro Foods Private Limited",
+            "headline": "CAUTION: Keyed with the PAN of Bhopal Agro Foods, but the guarantee names Sunrise Textiles. Reject false link.",
             "evidence_json": json.dumps({
                 "book": {
                     "source": "GTE",
-                    "raw_name": "Sunrise Inds Ltd",
-                    "std_name": "SUNRISE INDUSTRIES",
-                    "pan": "AAACK9999K",  # Kaveri PAN mistakenly entered in LOS
+                    "raw_name": "Sunrise Textiles Private Limited",
+                    "std_name": "SUNRISE TEXTILES",
+                    "pan": "AAACB4242K",  # the PAN of Bhopal Agro Foods, keyed on a Sunrise guarantee
                 },
                 "registry": {
-                    "entity_name": "Kaveri Chemicals Limited",
-                    "std_name": "KAVERI CHEMICALS",
-                    "cin": "U24100GJ2015PLC000042",
-                    "pan": "AAACK9999K",
-                    "city": "Ahmedabad",
+                    "entity_name": "Bhopal Agro Foods Private Limited",
+                    "std_name": "BHOPAL AGRO FOODS",
+                    "cin": "U15400MP2011PTC000042",
+                    "pan": "AAACB4242K",
+                    "city": "Bhopal",
                 },
                 "id_status": {"PAN": "conflict_name"},
-                "metrics": {"name_sim": 0.21, "pin_match": False, "state_match": False},
+                "metrics": {"name_sim": 0.06, "pin_match": False, "state_match": False},
             }),
         })
 
@@ -360,6 +368,9 @@ def get_mock_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind:
         filtered = [c for c in filtered if c["tier"] == tier]
     if kind:
         filtered = [c for c in filtered if c["kind"] == kind]
+    if q.strip():
+        needle = q.strip().lower()
+        filtered = [c for c in filtered if needle in (c["group_name"] + " " + c.get("headline", "") + " " + c["evidence_json"]).lower()]
 
     # Rank: crosses_limit DESC, crosses_le DESC, rupee_impact DESC
     filtered.sort(key=lambda c: (c["crosses_limit"], c["crosses_le"], c["rupee_impact"]), reverse=True)
@@ -392,8 +403,8 @@ def get_mock_batch_data(batch_id: str, user_name: str) -> dict[str, Any]:
     state = get_mock_state()
 
     is_rec = "REC" in batch_id
-    total_count = 1912 if is_rec else 3540
-    sample_count = 96 if is_rec else 71
+    total_count = 20288 if is_rec else 3535
+    sample_count = 1015 if is_rec else 71
 
     seed = state.active_batch_seeds.get(batch_id)
     if seed is None:
@@ -517,32 +528,41 @@ def get_mock_lineage_group_data(group_key: str, run_id: str | None = None) -> di
     state = get_mock_state()
     is_latest = (run_id is None or "step" not in run_id or int(run_id.split("step")[-1]) == state.step)
 
-    # Ownership tree nodes
-    tree_nodes = [
-        {"entity_name": "Sunrise Industries Limited", "depth": 0, "is_head": True, "stake_pct": "Head", "closes_cycle": False},
-        {"entity_name": "Sunrise Textiles Private Limited", "depth": 1, "is_head": False, "stake_pct": "100.0%", "closes_cycle": False},
-        {"entity_name": "Sunrise Agro Foods Private Limited", "depth": 1, "is_head": False, "stake_pct": "74.5%", "closes_cycle": False},
-        {"entity_name": "Sunrise Steels Private Limited", "depth": 2, "is_head": False, "stake_pct": "51.0%", "closes_cycle": False},
-    ]
-
+    # Ownership tree nodes, depth-first as the live screen shows them
+    tree_nodes = [{"entity_name": "Sunrise Industries Limited", "depth": 0, "is_head": True, "stake_pct": "Head", "closes_cycle": False}]
     if state.step >= 4:
-        tree_nodes.extend([
-            {"entity_name": "Sunrise Finvest Private Limited (HoldCo)", "depth": 1, "is_head": False, "stake_pct": "100.0%", "closes_cycle": False},
-            {"entity_name": "Sunrise Infra Projects Private Limited", "depth": 2, "is_head": False, "stake_pct": "100.0%", "closes_cycle": False},
-            {"entity_name": "Sunrise Logistics Private Limited", "depth": 2, "is_head": False, "stake_pct": "60.0%", "closes_cycle": False},
-        ])
-
-    # Members list
-    members = [
-        {"entity_key": "E:L17110MH2018PLC000017", "entity_name": "Sunrise Industries Limited", "exposure": Decimal("312000000.00"), "books": "LOS, TSY"},
-        {"entity_key": "E:U17110MH2019PTC000018", "entity_name": "Sunrise Textiles Private Limited", "exposure": Decimal("150000000.00"), "books": "LOS"},
-        {"entity_key": "E:U15100GJ2020PTC000019", "entity_name": "Sunrise Agro Foods Private Limited", "exposure": Decimal("120000000.00"), "books": "LOS"},
-        {"entity_key": "E:U27100MH2021PTC000020", "entity_name": "Sunrise Steels Private Limited", "exposure": Decimal("174000000.00"), "books": "GTE"},
+        tree_nodes += [
+            {"entity_name": "Sunrise Holdings Limited", "depth": 1, "is_head": False, "stake_pct": "74.0%", "closes_cycle": False},
+            {"entity_name": "Sunrise Finvest Private Limited", "depth": 2, "is_head": False, "stake_pct": "100.0%", "closes_cycle": False},
+        ]
+    tree_nodes += [
+        {"entity_name": "Sunrise Ceramics Private Limited", "depth": 1, "is_head": False, "stake_pct": "95.0%", "closes_cycle": False},
+        {"entity_name": "Sunrise Cables Private Limited", "depth": 2, "is_head": False, "stake_pct": "92.0%", "closes_cycle": False},
+        {"entity_name": "Sunrise Castings Private Limited", "depth": 1, "is_head": False, "stake_pct": "94.0%", "closes_cycle": False},
+        {"entity_name": "Sunrise Polymers Private Limited", "depth": 2, "is_head": False, "stake_pct": "72.0%", "closes_cycle": False},
+        {"entity_name": "Sunrise Power Private Limited", "depth": 1, "is_head": False, "stake_pct": "95.0%", "closes_cycle": False},
+        {"entity_name": "Sunrise Textiles Private Limited", "depth": 1, "is_head": False, "stake_pct": "67.0%", "closes_cycle": False},
     ]
+
+    # Members (sum to ₹75.6 cr; the ₹36.4 cr holding group joins at step 4)
+    members = [
+        {"entity_key": "E:L17110MH2018PLC000017", "entity_name": "Sunrise Industries Limited", "exposure": Decimal("402000000.00"), "books": "GTE, LOS, TSY"},
+        {"entity_key": "E:U99712MH2006PTC000021", "entity_name": "Sunrise Cables Private Limited", "exposure": Decimal("84000000.00"), "books": "LOS, TSY"},
+        {"entity_key": "E:U33825MH2007PTC000022", "entity_name": "Sunrise Ceramics Private Limited", "exposure": Decimal("75900000.00"), "books": "LOS, TSY"},
+        {"entity_key": "E:U40659MH1997PTC000023", "entity_name": "Sunrise Castings Private Limited", "exposure": Decimal("73600000.00"), "books": "LOS"},
+        {"entity_key": "E:U44125MH1982PTC000024", "entity_name": "Sunrise Power Private Limited", "exposure": Decimal("47200000.00"), "books": "GTE, LOS"},
+        {"entity_key": "E:U80977MH2004PTC000025", "entity_name": "Sunrise Textiles Private Limited", "exposure": Decimal("46000000.00"), "books": "GTE, LOS"},
+        {"entity_key": "E:U43156MH1989PTC000026", "entity_name": "Sunrise Polymers Private Limited", "exposure": Decimal("27400000.00"), "books": "LOS"},
+    ]
+    if state.step >= 4:
+        members += [
+            {"entity_key": "E:L65990MH2020PLC000999", "entity_name": "Sunrise Holdings Limited", "exposure": Decimal("260000000.00"), "books": "LOS"},
+            {"entity_key": "E:U87959MH1990PTC000027", "entity_name": "Sunrise Finvest Private Limited", "exposure": Decimal("104000000.00"), "books": "LOS"},
+        ]
 
     return {
         "group_key": group_key,
-        "group_name": "Sunrise Industries Group",
+        "group_name": "Sunrise Industries Limited",
         "run_id": run_id or f"R-20261011120000-step{state.step}",
         "is_latest": is_latest,
         "tree_nodes": tree_nodes if is_latest else [],
@@ -583,9 +603,9 @@ def get_mock_lineage_rows_data(group_key: str, source: str = "", product: str = 
             "tier": "T0",
         },
         {
-            "entity_name": "Sunrise Steels Private Limited",
+            "entity_name": "Sunrise Industries Limited",
             "source_system": "GTE",
-            "source_row_id": "GTE-2026-009841",
+            "source_row_id": "GTE-P-000002",
             "product": "FIN",
             "component": "GTE_FIN",
             "gross_amount": Decimal("174000000.00"),
@@ -621,7 +641,7 @@ def get_mock_pipeline_data() -> dict[str, Any]:
             {"via_path": "P2 (Soundex+PIN)", "count": 1000},
         ],
         "tiers": [
-            {"tier": "T0 (Exact ID)", "count": 1912},
+            {"tier": "T0 (Exact ID)", "count": 20288},
             {"tier": "T1 (Strong Name/PIN)", "count": 4720},
             {"tier": "T2 (Grey Band)", "count": 84},
             {"tier": "T3 (Conflict)", "count": 12},
@@ -630,10 +650,10 @@ def get_mock_pipeline_data() -> dict[str, Any]:
         "summary": {
             "total_book_records": 25000,
             "total_reg_entities": 4000,
-            "total_candidates": 24500,
-            "settled_in_sql_pct": Decimal("100.0"),  # 0% external model with stub
-            "sent_to_model_pct": Decimal("0.0"),
-            "reduction_ratio": Decimal("99.975"),
+            "total_candidates": 731543,
+            "settled_in_sql_pct": Decimal("95.6"),  # T0 + T1 share of tiered pairs on dev
+            "sent_to_model_pct": Decimal("0.0"),  # stub judge: no model calls
+            "reduction_ratio": Decimal("99.27"),
         },
     }
 

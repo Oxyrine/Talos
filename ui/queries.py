@@ -18,6 +18,7 @@ from ui.batch_token import generate_batch_token, verify_batch_token
 from ui.formatting import parse_evidence
 
 DEFAULT_BUSINESS_DATE = "2026-09-30"
+BOARD_ROWS = 100  # the register shows the top groups; the dev book has thousands
 
 
 class DatabaseUnavailableError(Exception):
@@ -44,6 +45,14 @@ def _dec(v: Any, default: str = "0") -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal(default)
 
 
+def _live_impact(row: dict[str, Any]) -> Decimal:
+    """Exposure a decision moves now (V_PROPOSAL_QUEUE.delta_amt; for a JV ruling, the JV's
+    exposure). rupee_impact is fixed when the proposal is filed against the baseline run, so an
+    ownership card filed before its records were linked shows 0; it is only the fallback."""
+    live = row.get("delta_amt")
+    return _dec(live) if live is not None and _dec(live) > 0 else _dec(row.get("rupee_impact"))
+
+
 def _current_run(conn) -> tuple[str | None, str]:
     """(run_id, business_date) of the newest successful run; business date falls back to the default."""
     rows = _rows(conn, "SELECT run_id, business_date FROM REPORT.V_CURRENT_RUN")
@@ -63,11 +72,13 @@ def _current_business_date() -> str:
 # -------------------------------------------------------------------------
 # Screen 1: Exposure Board
 # -------------------------------------------------------------------------
-def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidden", view: str = "talos") -> dict[str, Any]:
+def get_board_data(
+    business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidden", view: str = "talos", q: str = ""
+) -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import get_mock_board_data
 
-        return get_mock_board_data(business_date=business_date, sort=sort, view=view)
+        return get_mock_board_data(business_date=business_date, sort=sort, view=view, q=q)
 
     conn = _get_reader_connection()
     try:
@@ -86,25 +97,38 @@ def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidd
                    utilisation_pct, is_large, is_breach, group_flags,
                    hidden_exposure, headroom
             FROM REPORT.V_GROUP_EXPOSURE
-            WHERE run_id = {run_id} AND limit_exposure > 0
+            WHERE run_id = {run_id} AND group_key NOT LIKE 'U:%'
+              AND (limit_exposure > 0 OR (limit_exposure IS NULL AND reported_exposure > 0))
+            """,
+            run_id=run_id,
+        )
+        # Lone unlinked records (U: groups) are counted, not listed: before review there is
+        # one per source record.
+        unlinked = _rows(
+            conn,
+            """
+            SELECT COUNT(*) AS n, SUM(limit_exposure) AS amt
+            FROM REPORT.V_GROUP_EXPOSURE
+            WHERE run_id = {run_id} AND group_key LIKE 'U:%' AND limit_exposure > 0
             """,
             run_id=run_id,
         )
 
         groups = []
         hidden_total = Decimal("0.00")
-        unassigned = Decimal("0.00")
+        unassigned = _dec(unlinked[0]["amt"]) if unlinked else Decimal("0.00")
         breaches_count = 0
         large_count = 0
 
         for r in rows:
             flags = str(r["group_flags"] or "")
-            unresolved = "UNRESOLVED" in flags  # a lone unlinked record: shown as pending, not as a figure
+            # A reported group no Talos group carries yet (R:), or a lone unlinked record: pending.
+            unresolved = "UNRESOLVED" in flags or r["limit_exposure"] is None
             lim_exp = None if unresolved else _dec(r["limit_exposure"])
             # Hidden exposure is clamped at zero: Talos can only unmask, never shrink, a reported figure.
             hid_clamped = Decimal("0.00") if unresolved else max(Decimal("0.00"), _dec(r["hidden_exposure"]))
             hidden_total += hid_clamped
-            if unresolved or "UNASSIGNED" in flags:
+            if not unresolved and "UNASSIGNED" in flags:
                 unassigned += _dec(r["limit_exposure"])
             if r["is_breach"] and not unresolved:
                 breaches_count += 1
@@ -127,12 +151,17 @@ def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidd
                 "headroom": _dec(r["headroom"]),
             })
 
+        # Ties (e.g. every group before review) fall back to the reported figure.
         if sort == "util":
-            groups.sort(key=lambda g: g["utilisation_pct"], reverse=True)
+            groups.sort(key=lambda g: (g["utilisation_pct"], g["reported_exposure"]), reverse=True)
         elif sort == "hidden":
-            groups.sort(key=lambda g: g["hidden_exposure"], reverse=True)
+            groups.sort(key=lambda g: (g["hidden_exposure"], g["reported_exposure"]), reverse=True)
         else:
-            groups.sort(key=lambda g: g["limit_exposure"] or Decimal("0"), reverse=True)
+            groups.sort(key=lambda g: (g["limit_exposure"] or Decimal("0"), g["reported_exposure"]), reverse=True)
+        pending = [g for g in groups if g["limit_exposure"] is None]
+        # Search narrows the register only; the tiles and the pending count stay book-wide.
+        needle = q.strip().lower()
+        shown = [g for g in groups if needle in g["group_name"].lower() or needle in g["group_key"].lower()] if needle else groups
 
         return {
             "run_id": run_id,
@@ -145,7 +174,13 @@ def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidd
                 "unassigned_exposure": unassigned,
                 "capital_base": groups[0]["capital_base"] if groups else None,
             },
-            "groups": groups,
+            "groups": shown[:BOARD_ROWS],
+            "group_count": len(groups),
+            "match_count": len(shown),
+            "q": q.strip(),
+            "pending_count": len(pending),
+            "first_pending_name": pending[0]["group_name"] if pending else None,
+            "unlinked_records": int(unlinked[0]["n"] or 0) if unlinked else 0,
         }
     finally:
         conn.close()
@@ -154,11 +189,11 @@ def get_board_data(business_date: str = DEFAULT_BUSINESS_DATE, sort: str = "hidd
 # -------------------------------------------------------------------------
 # Screen 2: Review Queue
 # -------------------------------------------------------------------------
-def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str = "") -> dict[str, Any]:
+def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str = "", q: str = "") -> dict[str, Any]:
     if is_mock_mode():
         from ui.mock_data import get_mock_queue_data
 
-        return get_mock_queue_data(page=page, per_page=per_page, tier=tier, kind=kind)
+        return get_mock_queue_data(page=page, per_page=per_page, tier=tier, kind=kind, q=q)
 
     conn = _get_reader_connection()
     try:
@@ -194,6 +229,12 @@ def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str 
         if kind:
             clauses.append("kind = {kind}")
             params["kind"] = kind
+        if q.strip():
+            # Free-text search over the group name and the evidence (names, places). LIKE
+            # wildcards in the term are escaped so it matches literally.
+            like = "%" + q.strip().upper().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            clauses.append("(UPPER(group_name) LIKE {q} ESCAPE '\\' OR UPPER(evidence_json) LIKE {q} ESCAPE '\\')")
+            params["q"] = like
         where_sql = " AND ".join(clauses)
 
         total_items = int(conn.execute(
@@ -205,7 +246,7 @@ def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str 
         # per_page and offset are ints validated by the route, so formatting them in is safe.
         proposals_raw = conn.execute(
             f"""
-            SELECT proposal_id, kind, subject_key, tier, tier_reason, warning, rupee_impact,
+            SELECT proposal_id, kind, subject_key, tier, tier_reason, warning, rupee_impact, delta_amt,
                    crosses_limit, crosses_le, group_before_pct, group_after_pct, group_name, evidence_json
             FROM REPORT.V_PROPOSAL_QUEUE
             WHERE {where_sql}
@@ -222,7 +263,7 @@ def get_queue_data(page: int = 1, per_page: int = 25, tier: str = "", kind: str 
             "tier": p["tier"],
             "tier_reason": p["tier_reason"],
             "warning": p["warning"],
-            "rupee_impact": _dec(p["rupee_impact"]),
+            "rupee_impact": _live_impact(p),
             "crosses_limit": int(bool(p["crosses_limit"])),
             "crosses_le": int(bool(p["crosses_le"])),
             "group_before_pct": _dec(p["group_before_pct"]),
@@ -375,7 +416,7 @@ def get_ruling_data(proposal_id: str) -> dict[str, Any] | None:
     try:
         rows = _rows(
             conn,
-            "SELECT kind, evidence_json, rupee_impact FROM REPORT.V_PROPOSAL_QUEUE WHERE proposal_id = {pid}",
+            "SELECT kind, evidence_json, rupee_impact, delta_amt FROM REPORT.V_PROPOSAL_QUEUE WHERE proposal_id = {pid}",
             pid=proposal_id,
         )
         if not rows or rows[0]["kind"] != "CONTROL_RULING":
@@ -407,7 +448,7 @@ def get_ruling_data(proposal_id: str) -> dict[str, Any] | None:
         return {
             "proposal_id": proposal_id,
             "entity_name": ev.get("held_name") or ev.get("held_entity_key") or proposal_id,
-            "gross_exposure": _dec(rows[0]["rupee_impact"]),
+            "gross_exposure": _live_impact(rows[0]),
             "partners": partners,
         }
     finally:
@@ -479,10 +520,12 @@ def get_lineage_group_data(group_key: str, run_id: str | None = None) -> dict[st
             for t in _rows(
                 conn,
                 """
-                SELECT held_name, depth, closes_cycle, control_type, stake_pct
-                FROM REPORT.V_OWNERSHIP_PATH
-                WHERE root_key = {gk}
-                ORDER BY depth, held_name
+                SELECT COALESCE(n.entity_name, op.held_name) AS held_name, op.depth, op.closes_cycle,
+                       op.control_type, op.stake_pct
+                FROM REPORT.V_OWNERSHIP_PATH op
+                LEFT JOIN REPORT.V_ENTITY_NAME n ON n.entity_key = op.entity_key
+                WHERE op.root_key = {gk}
+                ORDER BY op.ownership_path   -- depth-first, so each node follows its parent
                 """,
                 gk=group_key,
             ):
@@ -675,7 +718,8 @@ def get_pipeline_data() -> dict[str, Any]:
                 "total_candidates": int(s["total_candidates"] or 0) if s else 0,
                 "settled_in_sql_pct": _dec(s["settled_in_sql_pct"] if s else None),
                 "sent_to_model_pct": _dec(s["sent_to_model_pct"] if s else None),
-                "reduction_ratio": _dec(s["reduction_ratio"] if s else None),
+                # the view holds a 0..1 ratio; the screen (and mock data) show a percentage
+                "reduction_ratio": _dec(s["reduction_ratio"] if s else None) * 100,
             },
         }
     finally:

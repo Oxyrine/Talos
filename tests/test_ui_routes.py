@@ -252,6 +252,12 @@ def test_db_unavailable_when_mock_disabled(monkeypatch):
     """Verify HTTP 503 is returned when TALOS_MOCK is unset and DB is unavailable (no silent fallback)."""
     monkeypatch.delenv("TALOS_MOCK", raising=False)
     monkeypatch.setenv("TALOS_SESSION_SECRET", "x" * 40)
+
+    # Simulate an unreachable database even when a local Nano is running.
+    def refuse(*args, **kwargs):
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr("orchestrator.db.connect", refuse)
     client = TestClient(app, follow_redirects=False)
 
     user = SessionUser(username="reviewer@talos.internal", role="APPROVER")
@@ -262,3 +268,55 @@ def test_db_unavailable_when_mock_disabled(monkeypatch):
     assert res.status_code == 503
     assert "503 Service Unavailable" in res.text
     assert "Exasol database unavailable (TALOS_MOCK is not enabled)" in res.text
+
+
+def test_batch_submit_accepts_more_than_1000_pairs(approver_client, monkeypatch):
+    """A 5% sample of a 20,000-link exact-ID batch is ~1,015 pairs: past Starlette's 1,000-field default."""
+    import ui.app as app_module
+
+    seen = {}
+    monkeypatch.setattr(app_module, "execute_batch", lambda **kw: seen.update(kw))
+    form = {f"pair_P-{i:05d}": "APPROVE" for i in range(1015)}
+    form.update(token="t", seed="1", reason="Sampled pairs checked")
+    res = approver_client.post(
+        "/queue/batch/B-REC-1", data=form, headers={"Origin": "http://testserver"}, follow_redirects=False
+    )
+    assert res.status_code == 303, res.text[:200]
+    assert len(seen["verdicts"]) == 1015 and all(seen["verdicts"].values())
+
+
+def test_mock_mode_marks_every_page_as_simulated(approver_client):
+    for path in ("/board", "/queue", "/pipeline"):
+        assert "Simulated data." in approver_client.get(path).text, path
+
+
+def test_search_boxes_filter_the_mock_board_and_queue(approver_client):
+    board = approver_client.get("/board?q=sunrise").text
+    assert "Sunrise Industries Limited" in board and "Kaveri Chemicals Group" not in board
+    assert 'name="q" value="sunrise"' in board
+    queue = approver_client.get("/queue?q=bhopal").text
+    assert "Bhopal Agro Foods" in queue and "Sunrise Holdings Limited" not in queue
+    assert "No pending proposals match" in approver_client.get("/queue?q=nothing-matches-this").text
+
+
+def test_batch_page_offers_approve_all_through_a_csp_safe_script(approver_client):
+    from ui.mock_data import get_mock_queue_data
+
+    batch_id = get_mock_queue_data()["batches"][0]["batch_id"]
+    page = approver_client.get(f"/queue/batch/{batch_id}")
+    assert page.status_code == 200
+    assert 'id="approve-all"' in page.text and 'form="batch-form"' in page.text and 'id="batch-form"' in page.text
+    assert '<script src="/static/batch.js' in page.text and "<script>" not in page.text  # no inline script
+    assert "script-src 'self'" in page.headers["Content-Security-Policy"]
+    script = approver_client.get("/static/batch.js")
+    assert script.status_code == 200 and "APPROVE" in script.text
+
+
+def test_ownership_batch_labels_holder_stake_and_cin(approver_client):
+    from ui.mock_data import get_mock_queue_data
+
+    ids = {b["batch_kind"]: b["batch_id"] for b in get_mock_queue_data()["batches"]}
+    own = approver_client.get(f"/queue/batch/{ids['OWNERSHIP']}").text
+    assert "Holder (parent)" in own and "Held (subsidiary)" in own and "Stake held:" in own
+    rec = approver_client.get(f"/queue/batch/{ids['RECORD_LINK']}").text
+    assert "Lending Book Entity" in rec and "Stake held:" not in rec

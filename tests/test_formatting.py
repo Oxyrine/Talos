@@ -84,6 +84,12 @@ def test_parse_evidence_maps_pipeline_shapes():
     assert link["book"]["raw_name"] == "Sunrise Inds Pvt Ltd"
     assert link["registry"]["entity_name"] == "Sunrise Industries Limited"
     assert link["book"]["pan"] == "matches registry"
+    assert link["registry"]["pan"] == "matches registry"  # no entity_key: falls back to the status word
+
+    keyed = parse_evidence('{"source_a":"TSY","name_a_raw":"A","name_b_raw":"A Ltd","entity_key":"E:U17110MH2018PLC000017",'
+                           '"id_status":{"PAN":"missing","CIN":"missing","LEI":"missing"}}')
+    assert keyed["registry"]["pan"] == "CIN U17110MH2018PLC000017"
+    assert keyed["book"]["pan"] is None  # the book record carries no ID: the card says "Not provided"
 
     own = parse_evidence(
         '{"kind":"OWNERSHIP","holder_entity_key":"E:U1","held_entity_key":"E:U2","holder_name":"A","held_name":"B","stake_pct":100.0}'

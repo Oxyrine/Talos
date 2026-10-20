@@ -64,7 +64,11 @@ SELECT * FROM (
 
 INSERT INTO RAW_LOS.CUSTOMER (cust_id, cust_name, pan, cin, address, city, state_code, group_code,
                               director_dins, business_date, load_id, loaded_at)
-SELECT 'FXC-' || n, 'Fixture ' || n || ' Limited', NULL, 'FX-' || n, NULL, 'Mumbai', 'MH', NULL, NULL,
+-- Loan-book group codes (the "reported" side of the board): FXG-DIA on the diamond's parent; FXG-B on a
+-- diamond member that is not the head (carried by no Talos group); FXG-SPLIT on two separate Talos groups.
+SELECT 'FXC-' || n, 'Fixture ' || n || ' Limited', NULL, 'FX-' || n, NULL, 'Mumbai', 'MH',
+       CASE n WHEN 'DIA_P' THEN 'FXG-DIA' WHEN 'DIA_B' THEN 'FXG-B' WHEN 'MIN_1' THEN 'FXG-SPLIT' WHEN 'MIN_2' THEN 'FXG-SPLIT' END,
+       NULL,
        '2026-09-30', l.load_id, l.loaded_at
 FROM STAGE.FX_AMOUNTS
 CROSS JOIN (SELECT 'FX-LOS-20260930-01' AS load_id, CAST('2026-10-02 06:00:00' AS TIMESTAMP) AS loaded_at FROM DUAL

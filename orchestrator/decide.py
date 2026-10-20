@@ -15,6 +15,7 @@ from typing import Any, Literal
 from pyexasol import ExaConnection
 
 from orchestrator.db import REPO_ROOT, connect
+from orchestrator.loader import insert_rows
 from orchestrator.policy import policy_in_force
 
 
@@ -781,7 +782,10 @@ def batch_decide(
                     },
                 )
             else:  # OWNERSHIP batch
-                # Insert OWNERSHIP_EVENTs reading real attributes
+                # Insert OWNERSHIP_EVENTs reading real attributes. Every proposal is validated
+                # first, then all events go in as chunked multi-row INSERTs (one statement per
+                # proposal made a 3,500-edge batch take over a minute).
+                events: list[tuple] = []
                 for idx, (pid, pdata) in enumerate(covered_props.items(), start=1):
                     p_subj = pdata["subject_key"]
                     p_holder = pdata["holder_entity_key"]
@@ -806,33 +810,22 @@ def batch_decide(
                     stake_raw = ev_dict.get("stake_pct") if "stake_pct" in ev_dict else ev_dict.get("share_pct")
                     if stake_raw is None:
                         raise ValueError(f"Proposal {pid} evidence missing required 'stake_pct'.")
-                    stake = float(stake_raw)
+                    stake = Decimal(str(stake_raw))
 
-                    conn.execute(
-                        """
-                        INSERT INTO GRAPH.OWNERSHIP_EVENT (
-                            event_id, edge_key, holder_entity_key, held_entity_key,
-                            edge_kind, control_type, status, stake_pct, "ACTION",
-                            evidence_hash, valid_from, valid_to, recorded_at, decision_id, proposal_id
-                        ) VALUES (
-                            {event_id}, {edge_key}, {holder_entity_key}, {held_entity_key},
-                            'CONTROL', 'MAJORITY', 'CONFIRMED', {stake_pct}, 'ASSERT',
-                            {evidence_hash}, {valid_from}, '9999-12-31', {recorded_at}, {decision_id}, {proposal_id}
-                        )
-                        """,
-                        query_params={
-                            "event_id": f"EV-{time_tag}-{idx:04d}",
-                            "edge_key": p_subj,
-                            "holder_entity_key": p_holder,
-                            "held_entity_key": p_held,
-                            "stake_pct": stake,
-                            "evidence_hash": p_ev_hash,
-                            "valid_from": v_from,
-                            "recorded_at": decided_at_str,
-                            "decision_id": dec_id,
-                            "proposal_id": pid,
-                        },
-                    )
+                    events.append((
+                        f"EV-{time_tag}-{idx:04d}", p_subj, p_holder, p_held,
+                        "CONTROL", "MAJORITY", "CONFIRMED", stake, "ASSERT",
+                        p_ev_hash, str(v_from), "9999-12-31", decided_at_str, dec_id, pid,
+                    ))
+
+                insert_rows(
+                    conn,
+                    "GRAPH.OWNERSHIP_EVENT",
+                    ["event_id", "edge_key", "holder_entity_key", "held_entity_key", "edge_kind", "control_type",
+                     "status", "stake_pct", '"ACTION"', "evidence_hash", "valid_from", "valid_to", "recorded_at",
+                     "decision_id", "proposal_id"],
+                    events,
+                )
 
             decision_type = "BATCH_APPROVE"
             covered_ids = tuple(covered_props.keys())

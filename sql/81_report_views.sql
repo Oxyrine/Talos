@@ -54,6 +54,15 @@ FROM STAGE.RECORD_STD
 WHERE side = 'BOOK';
 
 CREATE OR REPLACE VIEW REPORT.V_GROUP_EXPOSURE AS
+-- One row per group of a run:
+--   E:/U: groups from GOV.RUN_MEMBERSHIP (U: = a lone unlinked record, flagged UNRESOLVED);
+--   R:<reported_group> rows for reported groups that no Talos group carries yet ("not linked
+--   yet": reported figure only, limit_exposure NULL). A reported row drops off once its records
+--   are linked: a standalone SA:/C: row when its record is, a group code when all its customers are.
+-- The reported figure of a Talos group is that of its head's loan-book group code (the
+-- spreadsheet view of the head). A code is shown on one Talos group only: the largest whose
+-- head carries it. Smaller groups carrying the same code show 0 reported and 0 hidden,
+-- because their exposure is already inside that reported figure.
 WITH mem AS (
   SELECT run_id, group_key, COUNT(*) AS member_count, MAX(group_flags) AS group_flags
   FROM GOV.RUN_MEMBERSHIP
@@ -68,7 +77,7 @@ outp AS (
   GROUP BY run_id, group_key
 ),
 los_cust AS (
-  SELECT cust_id, group_code
+  SELECT cust_id, cust_name, group_code
   FROM RAW_LOS.CUSTOMER
   QUALIFY ROW_NUMBER() OVER (PARTITION BY cust_id ORDER BY loaded_at DESC, load_id DESC) = 1
 ),
@@ -85,23 +94,93 @@ head_code AS (
   )
   QUALIFY ROW_NUMBER() OVER (PARTITION BY run_id, group_key ORDER BY votes DESC, group_code) = 1
 ),
-base AS (
+talos AS (
   SELECT m.run_id, m.group_key, m.member_count, m.group_flags,
          COALESCE(o.book_exposure, 0) AS book_exposure,
          COALESCE(o.limit_exposure, 0) AS limit_exposure,
-         p.capital_base, p.group_limit_pct, p.le_line_pct,
-         CASE WHEN m.group_key LIKE 'U:%' THEN NULL ELSE COALESCE(rr.reported_exposure, 0) END AS reported_exposure,
          hc.group_code AS reported_group
   FROM mem m
   LEFT JOIN outp o ON o.run_id = m.run_id AND o.group_key = m.group_key
-  LEFT JOIN REPORT.V_RUN_POLICY p ON p.run_id = m.run_id
   LEFT JOIN head_code hc ON hc.run_id = m.run_id AND hc.group_key = m.group_key
-  LEFT JOIN GOV.RUN_REPORTED rr ON rr.run_id = m.run_id AND rr.reported_group = hc.group_code
+),
+carrier AS (
+  SELECT run_id, group_key,
+         ROW_NUMBER() OVER (PARTITION BY run_id, reported_group ORDER BY limit_exposure DESC, group_key) AS rn
+  FROM talos
+  WHERE reported_group IS NOT NULL
+),
+loan_amt AS (
+  SELECT cust_id, SUM(outstanding_amt) AS amt
+  FROM (SELECT * FROM RAW_LOS.LOAN
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY loan_id ORDER BY loaded_at DESC, load_id DESC) = 1)
+  GROUP BY cust_id
+),
+code_name AS (
+  -- display name of a loan-book group: its customer with the largest outstanding
+  SELECT c.group_code, c.cust_name, COUNT(*) OVER (PARTITION BY c.group_code) AS customers
+  FROM los_cust c
+  LEFT JOIN loan_amt la ON la.cust_id = c.cust_id
+  WHERE c.group_code IS NOT NULL
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY c.group_code ORDER BY COALESCE(la.amt, 0) DESC, c.cust_id) = 1
+),
+code_link AS (
+  -- per run and loan-book group code: customers with exposure, and how many of them sit in a
+  -- Talos (E:) group. When all of them do, the reported group has been resolved by linking.
+  SELECT m.run_id, c.group_code AS reported_group, COUNT(*) AS customers,
+         SUM(CASE WHEN m.in_talos = 1 THEN 1 ELSE 0 END) AS linked
+  FROM los_cust c
+  JOIN (SELECT run_id, rec_key, MAX(CASE WHEN group_key LIKE 'E:%' THEN 1 ELSE 0 END) AS in_talos
+        FROM GOV.RUN_OUTPUT WHERE membership_kind = 'MEMBER' AND rec_key LIKE 'LOS:%'
+        GROUP BY run_id, rec_key) m ON m.rec_key = 'LOS:' || c.cust_id
+  WHERE c.group_code IS NOT NULL
+  GROUP BY m.run_id, c.group_code
+),
+sa_name AS (
+  SELECT 'SA:TSY:' || issuer_ref AS reported_group, MAX(issuer_name) AS name FROM RAW_TREASURY.HOLDING GROUP BY issuer_ref
+  UNION ALL
+  SELECT 'SA:GTE:' || party_ref, MAX(party_name) FROM RAW_GUARANTEE.GUARANTEE GROUP BY party_ref
+),
+base AS (
+  SELECT t.run_id, t.group_key, t.member_count, t.group_flags, t.book_exposure,
+         CAST(t.limit_exposure AS DECIMAL(18,2)) AS limit_exposure,
+         p.capital_base, p.group_limit_pct, p.le_line_pct,
+         CASE WHEN t.group_key LIKE 'U:%' THEN NULL
+              WHEN cr.rn = 1 THEN COALESCE(rr.reported_exposure, 0)
+              ELSE 0 END AS reported_exposure,
+         t.reported_group,
+         CASE WHEN cr.rn > 1 THEN FALSE ELSE TRUE END AS carries_reported,
+         CAST(NULL AS VARCHAR(400)) AS reported_name
+  FROM talos t
+  LEFT JOIN carrier cr ON cr.run_id = t.run_id AND cr.group_key = t.group_key
+  LEFT JOIN REPORT.V_RUN_POLICY p ON p.run_id = t.run_id
+  LEFT JOIN GOV.RUN_REPORTED rr ON rr.run_id = t.run_id AND rr.reported_group = t.reported_group
+  UNION ALL
+  SELECT rr.run_id, 'R:' || rr.reported_group, COALESCE(cn.customers, 1), CAST('NOT_LINKED' AS VARCHAR(80)),
+         CAST(NULL AS DECIMAL(18,2)), CAST(NULL AS DECIMAL(18,2)),
+         p.capital_base, p.group_limit_pct, p.le_line_pct,
+         rr.reported_exposure, rr.reported_group, TRUE,
+         COALESCE(cn.cust_name, lc.cust_name, sn.name, rr.reported_group)
+  FROM GOV.RUN_REPORTED rr
+  LEFT JOIN REPORT.V_RUN_POLICY p ON p.run_id = rr.run_id
+  LEFT JOIN code_name cn ON cn.group_code = rr.reported_group
+  LEFT JOIN los_cust lc ON rr.reported_group = 'C:' || lc.cust_id
+  LEFT JOIN sa_name sn ON sn.reported_group = rr.reported_group
+  WHERE NOT EXISTS (SELECT 1 FROM talos t WHERE t.run_id = rr.run_id AND t.reported_group = rr.reported_group)
+    -- a group whose customers are all linked into Talos groups (e.g. merged by an ownership link)
+    AND NOT EXISTS (SELECT 1 FROM code_link cl
+                    WHERE cl.run_id = rr.run_id AND cl.reported_group = rr.reported_group AND cl.linked = cl.customers)
+    -- a standalone reported row (SA: treasury/guarantee, C: customer without a group code)
+    -- drops off once its record is linked into a Talos group
+    AND NOT EXISTS (SELECT 1 FROM GOV.RUN_OUTPUT o
+                    WHERE o.run_id = rr.run_id AND o.membership_kind = 'MEMBER' AND o.group_key LIKE 'E:%'
+                      AND o.rec_key = CASE WHEN rr.reported_group LIKE 'SA:TSY:%' THEN 'TSY:' || SUBSTR(rr.reported_group, 8)
+                                           WHEN rr.reported_group LIKE 'SA:GTE:%' THEN 'GTE:' || SUBSTR(rr.reported_group, 8)
+                                           WHEN rr.reported_group LIKE 'C:%' THEN 'LOS:' || SUBSTR(rr.reported_group, 3) END)
 )
 SELECT b.run_id,
        CASE WHEN l.run_id IS NULL THEN FALSE ELSE TRUE END AS is_latest,
        b.group_key,
-       COALESCE(n.entity_name, b.group_key) AS group_name,
+       COALESCE(n.entity_name, b.reported_name, b.group_key) AS group_name,
        b.group_key AS head_entity_key,
        b.member_count,
        b.book_exposure,
@@ -113,7 +192,7 @@ SELECT b.run_id,
        b.group_flags,
        b.reported_exposure,
        b.reported_group,
-       b.limit_exposure - b.reported_exposure AS hidden_exposure,
+       CASE WHEN b.carries_reported THEN b.limit_exposure - b.reported_exposure ELSE 0 END AS hidden_exposure,
        CAST(b.capital_base * b.group_limit_pct / 100 AS DECIMAL(18,2)) - b.limit_exposure AS headroom
 FROM base b
 LEFT JOIN REPORT.V_LATEST_RUN l ON l.run_id = b.run_id
