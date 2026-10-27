@@ -1,4 +1,4 @@
 <div id="header-kpi-ribbon" class="kpi-ribbon"{% if oob %} hx-swap-oob="outerHTML"{% endif %}>
-      <div class="kpi-tile lead-metric {% if kpi.hidden_exposure > 0 %}has-hidden{% endif %}"><div class="kpi-label">Hidden exposure unmasked</div><div class="kpi-value tabular-nums">{% if kpi.hidden_exposure > 0 %}+{% endif %}{{ kpi.hidden_exposure | inr_cr }}</div><div class="kpi-sub">Resolved less reported exposure</div></div>
+      <div class="kpi-tile lead-metric {% if kpi.hidden_exposure > 0 %}has-hidden{% endif %}"><div class="kpi-label">Unmasked across the book</div><div class="kpi-value tabular-nums">{% if kpi.hidden_exposure > 0 %}+{% endif %}{{ kpi.hidden_exposure | inr_cr }}</div><div class="kpi-sub">Resolved less reported, summed over every group</div></div>
       <div class="position-counts"><div class="kpi-tile"><div class="kpi-label">Limit breaches</div><div class="kpi-value {% if kpi.breaches_count %}text-danger{% endif %}">{{ kpi.breaches_count }}</div></div><div class="kpi-tile"><div class="kpi-label">Large exposures</div><div class="kpi-value">{{ kpi.large_count }}</div></div></div>
 </div>

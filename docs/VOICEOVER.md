@@ -8,7 +8,7 @@ Narration is 404 words, which is 2:42 at 150 words a minute. That leaves room to
 
 ## Before you record
 
-1. **Start from step 0.** Open a terminal in `C:\Users\arula\talos-live-console` (branch `fix/live-console`) and run:
+1. **Start from step 0.** Open a terminal in the repo root (branch `main`) and run:
 
    ```bash
    UV_SYSTEM_CERTS=1 uv run talos demo
@@ -17,7 +17,7 @@ Narration is 404 words, which is 2:42 at 150 words a minute. That leaves room to
    It wipes the Talos schemas, regenerates the dev data, loads and matches it (about 2½ minutes), then serves the console at **http://127.0.0.1:8000**. Record from that local address, which is faster than the public tunnel. Redo this any time you want a clean take.
 2. **Sign in** as `Demo Approver`. The password is in `.talos/demo-reviewer.txt`.
 3. **Check you are at step 0** before pressing record:
-   - `/board` says **"5378 group perimeters awaiting resolution"** and the hidden-exposure tile reads ₹0.0 cr.
+   - `/board` says **"5378 group perimeters awaiting resolution"** and the "Unmasked across the book" tile reads ₹0.0 cr.
    - `/queue` shows two batch banners: *Corroborated Ownership Edges* (3,535 connections, 71 pairs in sample) and *Exact-ID Record Links* (20,288 connections, 1015 pairs in sample), and "Resolution proposals 4813".
 4. **Browser:** full screen, 1080p, zoom 100%. Close other tabs. Sign-in and the console run on `127.0.0.1`, so nothing is visible outside your laptop.
 5. **One take is a one-way trip.** Each approval is permanent (append-only). If you fumble, rerun step 1 and start again; do not try to undo.
