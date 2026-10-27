@@ -265,7 +265,7 @@ Footer: *Nothing leaves the database.*
 
 | Criterion (weight) | Where the evidence is |
 |---|---|
-| Exasol use (25%) | slide 11; `sql/` (20 files); `docs/PROBE.md` |
+| Exasol use (25%) | slide 11; `sql/` (24 files); `docs/PROBE.md` |
 | Innovation (25%) | the human gate with live impact; sampled batches; append-only replay |
 | Technical quality (20%) | tests and CI (unit + Exasol job); `CONTRACT.md`; role grants |
 | UX (15%) | board, queue card, lineage; one-click path from number to source row |
