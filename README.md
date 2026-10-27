@@ -10,6 +10,16 @@ Talos resolves records to legal entities and links entities into groups, entirel
 
 ---
 
+## Submission materials
+
+- **Demo video (2:59):** [Exathon Pitch.mp4](Exathon%20Pitch.mp4)
+- **Pitch deck:** [docs/deck/Talos-pitch-deck.pptx](docs/deck/Talos-pitch-deck.pptx)
+- **Problem statement:** [docs/PROBLEM.md](docs/PROBLEM.md) (also the opening of this README)
+- **Run guide and deployment:** [docs/RUN_GUIDE.md](docs/RUN_GUIDE.md)
+- **Licence:** [MIT](LICENSE)
+
+---
+
 ## The Problem & The Regulation
 
 In corporate banking, credit exposure is fragmented across disparate books:
